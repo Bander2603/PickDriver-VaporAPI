@@ -1,14 +1,22 @@
 import Fluent
 import Vapor
+import SQLKit
 
 func routes(_ app: Application) throws {
-    app.get { req async in
-        "It works!"
+    try app.register(collection: AuthController())
+    
+    
+    app.get { req in
+        "PickDriver Vapor API is live 🚀"
     }
 
-    app.get("hello") { req async -> String in
-        "Hello, world!"
+    app.get("test") { req in
+        "This is a test 🚀"
     }
 
-    try app.register(collection: TodoController())
+    app.get("races") { req async throws -> [Race] in
+        try await Race.query(on: req.db).all()
+    }
+
 }
+
