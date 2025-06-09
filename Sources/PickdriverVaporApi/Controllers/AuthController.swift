@@ -34,18 +34,18 @@ struct AuthResponse: Content {
     let token: String
 }
 
-final class AuthController: RouteCollection {
+struct AuthController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         let auth = routes.grouped("api", "auth")
-        auth.post("register", use: registerHandler)
-        auth.post("login", use: loginHandler)
-        
-        // 🔐 Protected route group
+
+        auth.post("register", use: Self.registerHandler)
+        auth.post("login", use: Self.loginHandler)
+
         let protected = auth.grouped(UserAuthenticator())
-        protected.get("profile", use: profileHandler)
+        protected.get("profile", use: Self.profileHandler)
     }
 
-    func registerHandler(_ req: Request) async throws -> AuthResponse {
+    static func registerHandler(_ req: Request) async throws -> AuthResponse {
         let data = try req.content.decode(RegisterRequest.self)
 
         guard data.username.count >= 3 else {
@@ -55,7 +55,6 @@ final class AuthController: RouteCollection {
             throw Abort(.badRequest, reason: "Password must be at least 6 characters long.")
         }
 
-        // Check for existing email or username
         if try await User.query(on: req.db).filter(\.$email == data.email).first() != nil {
             throw Abort(.conflict, reason: "Email already in use.")
         }
@@ -72,7 +71,7 @@ final class AuthController: RouteCollection {
         return AuthResponse(user: user.convertToPublic(), token: token)
     }
 
-    func loginHandler(_ req: Request) async throws -> AuthResponse {
+    static func loginHandler(_ req: Request) async throws -> AuthResponse {
         let data = try req.content.decode(LoginRequest.self)
 
         guard let user = try await User.query(on: req.db).filter(\.$email == data.email).first() else {
@@ -87,13 +86,13 @@ final class AuthController: RouteCollection {
 
         return AuthResponse(user: user.convertToPublic(), token: token)
     }
-    
-    func profileHandler(_ req: Request) throws -> User.Public {
+
+    static func profileHandler(_ req: Request) throws -> User.Public {
         let user = try req.auth.require(User.self)
         return user.convertToPublic()
     }
 
-    private func generateToken(for user: User, on req: Request) throws -> String {
+    private static func generateToken(for user: User, on req: Request) throws -> String {
         let expiration = ExpirationClaim(value: .init(timeIntervalSinceNow: req.application.jwtExpiration))
         let payload = UserPayload(id: try user.requireID(), exp: expiration)
         return try req.jwt.sign(payload)
