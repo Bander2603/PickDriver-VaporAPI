@@ -43,6 +43,7 @@ struct AuthController: RouteCollection {
 
         let protected = auth.grouped(UserAuthenticator())
         protected.get("profile", use: Self.profileHandler)
+        protected.put("password", use: Self.updatePasswordHandler)
     }
 
     static func registerHandler(_ req: Request) async throws -> AuthResponse {
@@ -90,6 +91,24 @@ struct AuthController: RouteCollection {
     static func profileHandler(_ req: Request) throws -> User.Public {
         let user = try req.auth.require(User.self)
         return user.convertToPublic()
+    }
+    
+    static func updatePasswordHandler(_ req: Request) async throws -> HTTPStatus {
+        let data = try req.content.decode(UpdatePasswordRequest.self)
+        let user = try req.auth.require(User.self)
+
+        guard try Bcrypt.verify(data.currentPassword, created: user.passwordHash) else {
+            throw Abort(.unauthorized, reason: "Current password is incorrect.")
+        }
+
+        guard data.newPassword.count >= 6 else {
+            throw Abort(.badRequest, reason: "New password must be at least 6 characters long.")
+        }
+
+        user.passwordHash = try Bcrypt.hash(data.newPassword)
+        try await user.save(on: req.db)
+
+        return .ok
     }
 
     private static func generateToken(for user: User, on req: Request) throws -> String {
