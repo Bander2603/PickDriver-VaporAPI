@@ -10,7 +10,7 @@ import Fluent
 
 struct RaceController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
-        let races = routes.grouped("api", "races")
+        let races = routes.grouped("races")
         races.get(use: getAllHandler)
         races.get("upcoming", use: getUpcomingHandler)
         races.get("current", use: getCurrentHandler)
@@ -34,7 +34,7 @@ struct RaceController: RouteCollection {
             .filter(\.$raceTime > Date())
             .sort(\.$raceTime)
             .first() else {
-                throw Abort(.notFound, reason: "No upcoming race found.")
+            throw Abort(.notFound, reason: "No upcoming race found.")
         }
         return race
     }
@@ -46,3 +46,4 @@ struct RaceController: RouteCollection {
         return race
     }
 }
+
