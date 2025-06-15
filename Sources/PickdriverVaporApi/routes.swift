@@ -5,6 +5,7 @@ import SQLKit
 func routes(_ app: Application) throws {
     try app.register(collection: AuthController())
     try app.register(collection: RaceController())
+    try app.register(collection: DriverController())
     
     app.get { req in
         "PickDriver Vapor API is live 🚀"
