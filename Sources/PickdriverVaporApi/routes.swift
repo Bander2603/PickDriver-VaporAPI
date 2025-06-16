@@ -7,9 +7,11 @@ func routes(_ app: Application) throws {
     try app.register(collection: RaceController())
     try app.register(collection: DriverController())
     try app.register(collection: StandingsController())
-    try app.register(collection: LeagueController())
-
     
+    let api = app.grouped("api", "leagues")
+    try LeagueController().boot(routes: api)
+
+
     app.get { req in
         "PickDriver Vapor API is live 🚀"
     }

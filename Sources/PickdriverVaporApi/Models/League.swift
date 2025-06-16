@@ -17,7 +17,7 @@ final class League: Model, Content, @unchecked Sendable {
     @Field(key: "name")
     var name: String
 
-    @Field(key: "code")
+    @Field(key: "invite_code")
     var code: String
 
     @Field(key: "status")
@@ -26,23 +26,40 @@ final class League: Model, Content, @unchecked Sendable {
     @Field(key: "initial_race_round")
     var initialRaceRound: Int?
 
-    @Parent(key: "creator_id")
+    @Parent(key: "owner_id")
     var creator: User
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
+    
+    @Field(key: "teams_enabled")
+    var teamsEnabled: Bool
+
+    @Field(key: "bans_enabled")
+    var bansEnabled: Bool
+
+    @Field(key: "mirror_picks_enabled")
+    var mirrorEnabled: Bool
 
     init() {}
 
-    init(id: Int? = nil, name: String, code: String, status: String, initialRaceRound: Int? = nil, creatorID: Int) {
+    init(id: Int? = nil, name: String, code: String, status: String, initialRaceRound: Int? = nil, creatorID: Int,
+         teamsEnabled: Bool = false, bansEnabled: Bool = false, mirrorEnabled: Bool = false) {
         self.id = id
         self.name = name
         self.code = code
         self.status = status
         self.initialRaceRound = initialRaceRound
         self.$creator.id = creatorID
+        self.teamsEnabled = teamsEnabled
+        self.bansEnabled = bansEnabled
+        self.mirrorEnabled = mirrorEnabled
     }
+
 }
+
+import Vapor
+import Fluent
 
 final class LeagueMember: Model, Content, @unchecked Sendable {
     static let schema = "league_members"
@@ -56,19 +73,20 @@ final class LeagueMember: Model, Content, @unchecked Sendable {
     @Parent(key: "league_id")
     var league: League
 
-    @Field(key: "pick_order")
+    @OptionalField(key: "pick_order")
     var pickOrder: Int?
+
+    @Timestamp(key: "joined_at", on: .create)
+    var joinedAt: Date?
 
     init() {}
 
-    init(id: Int? = nil, userID: Int, leagueID: Int, pickOrder: Int? = nil) {
-        self.id = id
+    init(userID: Int, leagueID: Int, pickOrder: Int? = nil) {
         self.$user.id = userID
         self.$league.id = leagueID
         self.pickOrder = pickOrder
     }
 }
-
 
 extension League {
     struct Public: Content {
@@ -78,14 +96,34 @@ extension League {
         let status: String
         let initialRaceRound: Int?
         let creatorID: Int
+        let teamsEnabled: Bool
+        let bansEnabled: Bool
+        let mirrorEnabled: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case name
+            case code = "invite_code"
+            case status
+            case initialRaceRound = "initial_race_round"
+            case creatorID = "owner_id"
+            case teamsEnabled = "teams_enabled"
+            case bansEnabled = "bans_enabled"
+            case mirrorEnabled = "mirror_picks_enabled"
+        }
     }
 
     func convertToPublic() -> Public {
-        Public(id: id,
-               name: name,
-               code: code,
-               status: status,
-               initialRaceRound: initialRaceRound,
-               creatorID: $creator.id)
+        Public(
+            id: id,
+            name: name,
+            code: code,
+            status: status,
+            initialRaceRound: initialRaceRound,
+            creatorID: $creator.id,
+            teamsEnabled: teamsEnabled,
+            bansEnabled: bansEnabled,
+            mirrorEnabled: mirrorEnabled
+        )
     }
 }

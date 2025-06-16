@@ -112,7 +112,8 @@ struct AuthController: RouteCollection {
     }
 
     private static func generateToken(for user: User, on req: Request) throws -> String {
-        let expiration = ExpirationClaim(value: .init(timeIntervalSinceNow: req.application.jwtExpiration))
+        let timestamp = Int(Date().timeIntervalSince1970 + req.application.jwtExpiration)
+        let expiration = ExpirationClaim(value: Date(timeIntervalSince1970: TimeInterval(timestamp)))
         let payload = UserPayload(id: try user.requireID(), exp: expiration)
         return try req.jwt.sign(payload)
     }

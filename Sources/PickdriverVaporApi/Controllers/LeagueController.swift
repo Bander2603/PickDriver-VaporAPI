@@ -10,24 +10,29 @@ import Fluent
 
 struct LeagueController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
-        let leagueRoutes = routes.grouped("api", "leagues")
-
-        let protected = leagueRoutes.grouped(UserAuthenticator())
+        let protected = routes.grouped(UserAuthenticator())
 
         protected.get("my", use: getMyLeagues)
         protected.post("create", use: createLeague)
+        protected.post("join", use: joinLeague)
     }
 
     func getMyLeagues(_ req: Request) async throws -> [League.Public] {
         let user = try req.auth.require(User.self)
 
-        let leagueMemberships = try await LeagueMember.query(on: req.db)
+        let memberships = try await LeagueMember.query(on: req.db)
             .filter(\.$user.$id == user.requireID())
-            .with(\.$league)
             .all()
 
-        return leagueMemberships.map { $0.league.convertToPublic() }
+        let leagueIDs = memberships.map { $0.$league.id }
+
+        let leagues = try await League.query(on: req.db)
+            .filter(\.$id ~~ leagueIDs)
+            .all()
+
+        return leagues.map { $0.convertToPublic() }
     }
+
 
     func createLeague(_ req: Request) async throws -> League.Public {
         let user = try req.auth.require(User.self)
@@ -35,7 +40,16 @@ struct LeagueController: RouteCollection {
 
         let code = generateUniqueCode()
 
-        let league = League(name: data.name, code: code, status: "pending", creatorID: try user.requireID())
+        let league = League(
+            name: data.name,
+            code: code,
+            status: "pending",
+            creatorID: try user.requireID(),
+            teamsEnabled: data.teamsEnabled,
+            bansEnabled: data.bansEnabled,
+            mirrorEnabled: data.mirrorEnabled
+        )
+
         try await league.save(on: req.db)
 
         let member = LeagueMember(userID: try user.requireID(), leagueID: try league.requireID())
@@ -52,6 +66,9 @@ struct LeagueController: RouteCollection {
 
 struct CreateLeagueRequest: Content {
     let name: String
+    let teamsEnabled: Bool
+    let bansEnabled: Bool
+    let mirrorEnabled: Bool
 }
 
 struct JoinLeagueRequest: Content {
