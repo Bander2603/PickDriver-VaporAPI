@@ -40,11 +40,17 @@ final class League: Model, Content, @unchecked Sendable {
 
     @Field(key: "mirror_picks_enabled")
     var mirrorEnabled: Bool
+    
+    @Field(key: "max_players")
+    var maxPlayers: Int
+    
+    @Field(key: "season_id")
+    var seasonID: Int
 
     init() {}
 
     init(id: Int? = nil, name: String, code: String, status: String, initialRaceRound: Int? = nil, creatorID: Int,
-         teamsEnabled: Bool = false, bansEnabled: Bool = false, mirrorEnabled: Bool = false) {
+         teamsEnabled: Bool = false, bansEnabled: Bool = false, mirrorEnabled: Bool = false, maxPlayers: Int, seasonID: Int) {
         self.id = id
         self.name = name
         self.code = code
@@ -54,6 +60,8 @@ final class League: Model, Content, @unchecked Sendable {
         self.teamsEnabled = teamsEnabled
         self.bansEnabled = bansEnabled
         self.mirrorEnabled = mirrorEnabled
+        self.maxPlayers = maxPlayers
+        self.seasonID = seasonID
     }
 
 }
@@ -96,6 +104,7 @@ extension League {
         let status: String
         let initialRaceRound: Int?
         let creatorID: Int
+        let maxPlayers: Int
         let teamsEnabled: Bool
         let bansEnabled: Bool
         let mirrorEnabled: Bool
@@ -107,6 +116,7 @@ extension League {
             case status
             case initialRaceRound = "initial_race_round"
             case creatorID = "owner_id"
+            case maxPlayers = "max_players"
             case teamsEnabled = "teams_enabled"
             case bansEnabled = "bans_enabled"
             case mirrorEnabled = "mirror_picks_enabled"
@@ -121,6 +131,7 @@ extension League {
             status: status,
             initialRaceRound: initialRaceRound,
             creatorID: $creator.id,
+            maxPlayers: maxPlayers,
             teamsEnabled: teamsEnabled,
             bansEnabled: bansEnabled,
             mirrorEnabled: mirrorEnabled

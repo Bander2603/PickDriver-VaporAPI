@@ -19,3 +19,9 @@ struct DriverStanding: Content {
     let team_color: String
 }
 
+struct TeamStanding: Content {
+    let team_id: Int
+    let name: String
+    let color: String
+    let points: Int
+}

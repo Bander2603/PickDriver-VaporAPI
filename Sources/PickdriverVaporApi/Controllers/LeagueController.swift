@@ -40,6 +40,14 @@ struct LeagueController: RouteCollection {
 
         let code = generateUniqueCode()
 
+        // Fetch the active season
+        guard let season = try await Season.query(on: req.db)
+            .filter(\.$active == true)
+            .first()
+        else {
+            throw Abort(.badRequest, reason: "No active season found.")
+        }
+        
         let league = League(
             name: data.name,
             code: code,
@@ -47,7 +55,9 @@ struct LeagueController: RouteCollection {
             creatorID: try user.requireID(),
             teamsEnabled: data.teamsEnabled,
             bansEnabled: data.bansEnabled,
-            mirrorEnabled: data.mirrorEnabled
+            mirrorEnabled: data.mirrorEnabled,
+            maxPlayers: data.maxPlayers,
+            seasonID: try season.requireID()
         )
 
         try await league.save(on: req.db)
@@ -66,6 +76,7 @@ struct LeagueController: RouteCollection {
 
 struct CreateLeagueRequest: Content {
     let name: String
+    let maxPlayers: Int
     let teamsEnabled: Bool
     let bansEnabled: Bool
     let mirrorEnabled: Bool
@@ -79,26 +90,36 @@ func joinLeague(_ req: Request) async throws -> League.Public {
     let user = try req.auth.require(User.self)
     let data = try req.content.decode(JoinLeagueRequest.self)
 
-    // Check if the league with this code exists
     guard let league = try await League.query(on: req.db)
         .filter(\.$code == data.code)
         .first() else {
         throw Abort(.notFound, reason: "League with the given code not found.")
     }
 
-    // Check if user is already a member
+    guard league.status.lowercased() == "pending" else {
+        throw Abort(.badRequest, reason: "You can only join leagues that are pending.")
+    }
+
     let alreadyMember = try await LeagueMember.query(on: req.db)
         .filter(\.$user.$id == user.requireID())
         .filter(\.$league.$id == league.requireID())
         .first() != nil
 
     if alreadyMember {
-        throw Abort(.conflict, reason: "User is already a member of this league.")
+        throw Abort(.conflict, reason: "You are already a member of this league.")
     }
 
-    // Create the membership
+    let memberCount = try await LeagueMember.query(on: req.db)
+        .filter(\.$league.$id == league.requireID())
+        .count()
+
+    if memberCount >= league.maxPlayers {
+        throw Abort(.conflict, reason: "League is already full.")
+    }
+
     let member = LeagueMember(userID: try user.requireID(), leagueID: try league.requireID())
     try await member.save(on: req.db)
 
     return league.convertToPublic()
 }
+
