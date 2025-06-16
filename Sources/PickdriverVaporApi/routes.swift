@@ -7,6 +7,7 @@ func routes(_ app: Application) throws {
     try app.register(collection: RaceController())
     try app.register(collection: DriverController())
     try app.register(collection: StandingsController())
+    try app.register(collection: LeagueController())
 
     
     app.get { req in
