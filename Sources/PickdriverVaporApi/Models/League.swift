@@ -66,9 +66,6 @@ final class League: Model, Content, @unchecked Sendable {
 
 }
 
-import Vapor
-import Fluent
-
 final class LeagueMember: Model, Content, @unchecked Sendable {
     static let schema = "league_members"
 
@@ -95,6 +92,49 @@ final class LeagueMember: Model, Content, @unchecked Sendable {
         self.pickOrder = pickOrder
     }
 }
+
+final class LeagueTeam: Model, Content, @unchecked Sendable {
+    static let schema = "league_teams"
+
+    @ID(custom: "id")
+    var id: Int?
+
+    @Field(key: "name")
+    var name: String
+
+    @Parent(key: "league_id")
+    var league: League
+
+    @Children(for: \.$team)
+    var members: [TeamMember]
+
+    init() {}
+    init(id: Int? = nil, name: String, leagueID: Int) {
+        self.id = id
+        self.name = name
+        self.$league.id = leagueID
+    }
+}
+
+final class TeamMember: Model, Content, @unchecked Sendable {
+    static let schema = "team_members"
+
+    @ID(custom: "id")
+    var id: Int?
+
+    @Parent(key: "user_id")
+    var user: User
+
+    @Parent(key: "team_id")
+    var team: LeagueTeam
+
+    init() {}
+    init(userID: Int, teamID: Int) {
+        self.$user.id = userID
+        self.$team.id = teamID
+    }
+}
+
 
 extension League {
     struct Public: Content {
