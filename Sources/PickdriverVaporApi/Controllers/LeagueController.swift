@@ -15,6 +15,10 @@ struct LeagueController: RouteCollection {
         protected.get("my", use: getMyLeagues)
         protected.post("create", use: createLeague)
         protected.post("join", use: joinLeague)
+        
+        protected.get(":leagueID", "members", use: getLeagueMembers)
+        protected.get(":leagueID", "teams", use: getLeagueTeams)
+        protected.post(":leagueID", "assign-pick-order", use: assignPickOrder)
     }
 
     func getMyLeagues(_ req: Request) async throws -> [League.Public] {
@@ -33,21 +37,19 @@ struct LeagueController: RouteCollection {
         return leagues.map { $0.convertToPublic() }
     }
 
-
     func createLeague(_ req: Request) async throws -> League.Public {
         let user = try req.auth.require(User.self)
         let data = try req.content.decode(CreateLeagueRequest.self)
 
         let code = generateUniqueCode()
 
-        // Fetch the active season
         guard let season = try await Season.query(on: req.db)
             .filter(\.$active == true)
             .first()
         else {
             throw Abort(.badRequest, reason: "No active season found.")
         }
-        
+
         let league = League(
             name: data.name,
             code: code,
@@ -66,6 +68,56 @@ struct LeagueController: RouteCollection {
         try await member.save(on: req.db)
 
         return league.convertToPublic()
+    }
+
+    func getLeagueMembers(_ req: Request) async throws -> [User.Public] {
+        let _ = try req.auth.require(User.self)
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        let members = try await LeagueMember.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .with(\.$user)
+            .all()
+
+        return members.map { $0.user.convertToPublic() }
+    }
+
+    func getLeagueTeams(_ req: Request) async throws -> [LeagueTeam] {
+        let _ = try req.auth.require(User.self)
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        return try await LeagueTeam.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .with(\.$members)
+            .all()
+    }
+
+    func assignPickOrder(_ req: Request) async throws -> HTTPStatus {
+        let _ = try req.auth.require(User.self)
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        var members = try await LeagueMember.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .all()
+
+        guard !members.isEmpty else {
+            throw Abort(.badRequest, reason: "No members found in this league.")
+        }
+
+        members.shuffle()
+
+        for (index, member) in members.enumerated() {
+            member.pickOrder = index + 1
+            try await member.save(on: req.db)
+        }
+
+        return .ok
     }
 
     private func generateUniqueCode(length: Int = 6) -> String {
@@ -122,4 +174,3 @@ func joinLeague(_ req: Request) async throws -> League.Public {
 
     return league.convertToPublic()
 }
-
