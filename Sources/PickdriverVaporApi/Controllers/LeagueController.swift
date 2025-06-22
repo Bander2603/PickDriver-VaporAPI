@@ -21,6 +21,8 @@ struct LeagueController: RouteCollection {
         protected.post(":leagueID", "assign-pick-order", use: assignPickOrder)
         protected.post(":leagueID", "start-draft", use: activateDraft)
         protected.get(":leagueID", "draft", ":raceID", "pick-order", use: getPickOrderForRace)
+        protected.get(":leagueID", "draft", ":raceID", "deadlines", use: getDraftDeadlines)
+
     }
 
     func getMyLeagues(_ req: Request) async throws -> [League.Public] {
@@ -293,6 +295,37 @@ struct LeagueController: RouteCollection {
         }
 
         return draft.pickOrder
+    }
+    
+    func getDraftDeadlines(_ req: Request) async throws -> DraftDeadline {
+        let _ = try req.auth.require(User.self)
+
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self),
+              let raceID = req.parameters.get("raceID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Missing or invalid leagueID/raceID.")
+        }
+
+        guard let race = try await Race.find(raceID, on: req.db),
+              let fp1 = race.fp1Time else {
+            throw Abort(.notFound, reason: "Race not found or FP1 time missing.")
+        }
+
+        guard (try await RaceDraft.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$raceID == raceID)
+            .first()) != nil else {
+            throw Abort(.notFound, reason: "Draft not found for that race.")
+        }
+
+        let firstHalfDeadline = Calendar.current.date(byAdding: .hour, value: -36, to: fp1)!
+        let secondHalfDeadline = fp1
+
+        return DraftDeadline(
+            raceID: raceID,
+            leagueID: leagueID,
+            firstHalfDeadline: firstHalfDeadline,
+            secondHalfDeadline: secondHalfDeadline
+        )
     }
 
 

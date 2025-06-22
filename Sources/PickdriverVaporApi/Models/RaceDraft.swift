@@ -43,3 +43,11 @@ final class RaceDraft: Model, Content, @unchecked Sendable {
         self.status = status
     }
 }
+
+struct DraftDeadline: Content {
+    let raceID: Int
+    let leagueID: Int
+    let firstHalfDeadline: Date
+    let secondHalfDeadline: Date
+}
+
