@@ -19,6 +19,8 @@ struct LeagueController: RouteCollection {
         protected.get(":leagueID", "members", use: getLeagueMembers)
         protected.get(":leagueID", "teams", use: getLeagueTeams)
         protected.post(":leagueID", "assign-pick-order", use: assignPickOrder)
+        protected.post(":leagueID", "start-draft", use: activateDraft)
+        protected.get(":leagueID", "draft", ":raceID", "pick-order", use: getPickOrderForRace)
     }
 
     func getMyLeagues(_ req: Request) async throws -> [League.Public] {
@@ -102,7 +104,7 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid league ID.")
         }
 
-        var members = try await LeagueMember.query(on: req.db)
+        let members = try await LeagueMember.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .all()
 
@@ -110,9 +112,45 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "No members found in this league.")
         }
 
-        members.shuffle()
+        let league = try await League.find(leagueID, on: req.db)
+            ?? { throw Abort(.notFound, reason: "League not found") }()
 
-        for (index, member) in members.enumerated() {
+        var pickOrderMembers: [LeagueMember] = []
+
+        if league.teamsEnabled {
+            let teamAssignments = try await TeamMember.query(on: req.db)
+                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
+                .all()
+
+            var teamMap: [Int: [LeagueMember]] = [:]
+            for member in members {
+                if let teamEntry = teamAssignments.first(where: { $0.$user.id == member.$user.id }) {
+                    let teamID = teamEntry.$team.id
+                    teamMap[teamID, default: []].append(member)
+                }
+            }
+
+            for (teamID, list) in teamMap {
+                teamMap[teamID] = list.shuffled()
+            }
+
+            let teamIDs = teamMap.keys.shuffled()
+            var index = 0
+            while pickOrderMembers.count < members.count {
+                for teamID in teamIDs {
+                    if let list = teamMap[teamID], index < list.count {
+                        pickOrderMembers.append(list[index])
+                    }
+                }
+                index += 1
+            }
+
+        } else {
+            pickOrderMembers = members.shuffled()
+        }
+
+        for (index, member) in pickOrderMembers.enumerated() {
             member.pickOrder = index + 1
             try await member.save(on: req.db)
         }
@@ -124,6 +162,140 @@ struct LeagueController: RouteCollection {
         let charset = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
         return String((0..<length).compactMap { _ in charset.randomElement() })
     }
+    
+    func activateDraft(_ req: Request) async throws -> HTTPStatus {
+        let _ = try req.auth.require(User.self)
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self),
+              let league = try await League.find(leagueID, on: req.db)
+        else { throw Abort(.badRequest, reason: "Invalid league ID") }
+
+        guard league.status == "pending" else {
+            throw Abort(.badRequest, reason: "League must be pending to start the draft.")
+        }
+
+        let members = try await LeagueMember.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .all()
+
+        guard members.count == league.maxPlayers else {
+            throw Abort(.badRequest, reason: "Not all players have joined.")
+        }
+
+        if league.teamsEnabled {
+            let allUsers = Set(members.map { $0.$user.id })
+            let assignedUsers = Set(try await TeamMember.query(on: req.db)
+                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
+                .all()
+                .map { $0.$user.id })
+
+            guard assignedUsers == allUsers else {
+                throw Abort(.badRequest, reason: "All players must be assigned to teams.")
+            }
+        }
+
+        // 🔀 Fair randomized pick order with team interleaving
+        var pickOrderMembers: [LeagueMember] = []
+
+        if league.teamsEnabled {
+            let teamAssignments = try await TeamMember.query(on: req.db)
+                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
+                .all()
+
+            var teamMap: [Int: [LeagueMember]] = [:]
+            for member in members {
+                if let teamEntry = teamAssignments.first(where: { $0.$user.id == member.$user.id }) {
+                    let teamID = teamEntry.$team.id
+                    teamMap[teamID, default: []].append(member)
+                }
+            }
+
+            for (teamID, list) in teamMap {
+                teamMap[teamID] = list.shuffled()
+            }
+
+            let teamIDs = teamMap.keys.shuffled()
+            var index = 0
+            while pickOrderMembers.count < members.count {
+                for teamID in teamIDs {
+                    if let list = teamMap[teamID], index < list.count {
+                        pickOrderMembers.append(list[index])
+                    }
+                }
+                index += 1
+            }
+
+        } else {
+            pickOrderMembers = members.shuffled()
+        }
+
+        for (index, member) in pickOrderMembers.enumerated() {
+            member.pickOrder = index + 1
+            try await member.save(on: req.db)
+        }
+
+        // 🎯 First upcoming race
+        let firstRace = try await Race.query(on: req.db)
+            .filter(\.$seasonID == league.seasonID)
+            .filter(\.$completed == false)
+            .sort(\.$raceTime)
+            .first()
+
+        guard let race = firstRace else {
+            throw Abort(.badRequest, reason: "No upcoming races found for the active season.")
+        }
+
+        league.status = "active"
+        league.initialRaceRound = race.round
+        try await league.save(on: req.db)
+
+        // 🗓️ Races from initial round
+        let allRaces = try await Race.query(on: req.db)
+            .filter(\.$seasonID == league.seasonID)
+            .filter(\.$round >= league.initialRaceRound ?? 1)
+            .sort(\.$round)
+            .all()
+
+        let baseOrder = pickOrderMembers.map { $0.$user.id }
+
+        for (i, race) in allRaces.enumerated() {
+            let rotated = Array(baseOrder.dropFirst(i % baseOrder.count) + baseOrder.prefix(i % baseOrder.count))
+            let pickOrder = league.mirrorEnabled ? rotated + rotated.reversed() : rotated
+
+            let draft = RaceDraft(
+                leagueID: leagueID,
+                raceID: try race.requireID(),
+                pickOrder: pickOrder,
+                mirrorPicks: league.mirrorEnabled,
+                status: "pending"
+            )
+            try await draft.save(on: req.db)
+        }
+
+        return .ok
+    }
+    
+    func getPickOrderForRace(_ req: Request) async throws -> [Int] {
+        let _ = try req.auth.require(User.self)
+
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self),
+              let raceID = req.parameters.get("raceID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Missing or invalid leagueID/raceID.")
+        }
+
+        guard let draft = try await RaceDraft.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$raceID == raceID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Draft not found for that league and race.")
+        }
+
+        return draft.pickOrder
+    }
+
+
 }
 
 struct CreateLeagueRequest: Content {
