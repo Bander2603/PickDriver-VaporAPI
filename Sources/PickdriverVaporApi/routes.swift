@@ -14,6 +14,7 @@ func routes(_ app: Application) throws {
 
     // ✅ TeamController is already protected inside its own definition
     try api.register(collection: TeamController())
+    try api.register(collection: DraftController())
 
     // ✅ LeagueController requires explicit protection
     let protected = api.grouped(UserAuthenticator())
