@@ -33,7 +33,7 @@ struct StandingsController: RouteCollection {
             driver_points AS (
                 SELECT
                     rr.driver_id,
-                    SUM(rr.points) AS points
+                    SUM(rr.points + COALESCE(rr.sprint_points, 0)) AS points
                 FROM race_results rr
                 JOIN races r ON rr.race_id = r.id
                 WHERE r.completed = true
@@ -63,7 +63,7 @@ struct StandingsController: RouteCollection {
                 t.id AS team_id,
                 t.name,
                 t.color,
-                COALESCE(SUM(rr.points), 0) AS points
+                COALESCE(SUM(rr.points + COALESCE(rr.sprint_points, 0)), 0) AS points
             FROM race_results rr
             JOIN f1_teams t ON rr.f1_team_id = t.id
             GROUP BY t.id, t.name, t.color
