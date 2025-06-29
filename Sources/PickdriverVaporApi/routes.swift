@@ -19,6 +19,8 @@ func routes(_ app: Application) throws {
     // ✅ LeagueController requires explicit protection
     let protected = api.grouped(UserAuthenticator())
     try protected.grouped("leagues").register(collection: LeagueController())
+    
+    try protected.grouped("players").register(collection: PlayerController())
 
     // 🧪 Simple test endpoints
     app.get { req in
