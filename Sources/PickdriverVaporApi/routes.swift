@@ -3,26 +3,26 @@ import Vapor
 import SQLKit
 
 func routes(_ app: Application) throws {
-    // 🔐 Public controllers
     try app.register(collection: AuthController())
-    try app.register(collection: RaceController())
-    try app.register(collection: DriverController())
-    try app.register(collection: StandingsController())
-
+    
     // 🔐 API grouping
     let api = app.grouped("api")
+
+    // 🔐 Public controllers under /api/*
+    try api.register(collection: RaceController())
+    try api.register(collection: DriverController())
+    try api.register(collection: StandingsController())
 
     // ✅ TeamController is already protected inside its own definition
     try api.register(collection: TeamController())
     try api.register(collection: DraftController())
 
-    // ✅ LeagueController requires explicit protection
+    // ✅ LeagueController and PlayerController require explicit protection
     let protected = api.grouped(UserAuthenticator())
     try protected.grouped("leagues").register(collection: LeagueController())
-    
     try protected.grouped("players").register(collection: PlayerController())
 
-    // 🧪 Simple test endpoints
+    // 🧪 Simple test endpoints (non-API path)
     app.get { req in
         "PickDriver Vapor API is live 🚀"
     }
@@ -35,5 +35,3 @@ func routes(_ app: Application) throws {
         try await Race.query(on: req.db).all()
     }
 }
-
-
