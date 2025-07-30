@@ -7,7 +7,6 @@ import JWT
 
 // configures your application
 public func configure(_ app: Application) async throws {
-    // 🟢 Add these two lines:
     app.http.server.configuration.hostname = "0.0.0.0"
     app.http.server.configuration.port = 3000
     app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET")!))
@@ -31,7 +30,7 @@ public func configure(_ app: Application) async throws {
         username: username,
         password: password,
         database: dbName,
-        tls: .prefer(try .init(configuration: tls))  // ✅ This is the key fix
+        tls: .prefer(try .init(configuration: tls))
     )
 
     app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
