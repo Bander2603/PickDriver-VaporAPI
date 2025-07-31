@@ -21,6 +21,7 @@ struct LeagueController: RouteCollection {
         protected.post(":leagueID", "assign-pick-order", use: assignPickOrder)
         protected.post(":leagueID", "start-draft", use: activateDraft)
         protected.get(":leagueID", "draft", ":raceID", "pick-order", use: getPickOrderForRace)
+        protected.get(":leagueID", "draft", ":raceID", use: getRaceDraft)
         protected.get(":leagueID", "draft", ":raceID", "deadlines", use: getDraftDeadlines)
 
     }
@@ -326,6 +327,22 @@ struct LeagueController: RouteCollection {
             firstHalfDeadline: firstHalfDeadline,
             secondHalfDeadline: secondHalfDeadline
         )
+    }
+
+    func getRaceDraft(_ req: Request) async throws -> RaceDraft {
+        let _ = try req.auth.require(User.self)
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self),
+              let raceID = req.parameters.get("raceID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid leagueID/raceID.")
+        }
+        guard let draft = try await RaceDraft.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$raceID == raceID)
+            .first()
+        else {
+            throw Abort(.notFound, reason: "Draft not found.")
+        }
+        return draft
     }
 
 
