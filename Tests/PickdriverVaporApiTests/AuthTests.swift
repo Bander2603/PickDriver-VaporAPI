@@ -20,13 +20,13 @@ final class AuthTests: XCTestCase {
         var token: String = ""
 
         // Register
-        try await app.test(.POST, "/api/auth/register", beforeRequest: { req in
+        try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
             try req.content.encode([
                 "username": username,
                 "email": email,
                 "password": password
             ])
-        }, afterResponse: { res in
+        }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
             let auth = try res.content.decode(AuthResponse.self)
             XCTAssertEqual(auth.user.username, username)
@@ -36,9 +36,9 @@ final class AuthTests: XCTestCase {
         })
 
         // Profile (protected)
-        try await app.test(.GET, "/api/auth/profile", beforeRequest: { req in
+        try await app.test(.GET, "/api/auth/profile", beforeRequest: { req async throws in
             req.headers.bearerAuthorization = .init(token: token)
-        }, afterResponse: { res in
+        }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
             let user = try res.content.decode(User.Public.self)
             XCTAssertEqual(user.username, username)
@@ -46,12 +46,12 @@ final class AuthTests: XCTestCase {
         })
 
         // Login
-        try await app.test(.POST, "/api/auth/login", beforeRequest: { req in
+        try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
             try req.content.encode([
                 "email": email,
                 "password": password
             ])
-        }, afterResponse: { res in
+        }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
             let auth = try res.content.decode(AuthResponse.self)
             XCTAssertFalse(auth.token.isEmpty)

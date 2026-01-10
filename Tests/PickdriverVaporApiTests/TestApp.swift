@@ -30,6 +30,7 @@ enum TestApp {
     static func shutdown(_ app: Application) async {
         // Optional: clean DB to keep tests deterministic
         try? await app.autoRevert()
-        app.shutdown()
+        try? await app.asyncShutdown()
     }
 }
+
