@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: pickdriver_test
+          POSTGRES_USER: pickdriver
+          POSTGRES_PASSWORD: pickdriver
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pickdriver -d pickdriver_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_HOST: localhost
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: pickdriver_test
+      DATABASE_USERNAME: pickdriver
+      DATABASE_PASSWORD: pickdriver
+      JWT_SECRET: test_secret
+      JWT_EXPIRES_IN_SECONDS: "604800"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2.3"
+
+      - name: Build
+        run: swift build -c debug
+
+      - name: Enable pg_trgm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          psql "postgresql://pickdriver:pickdriver@localhost:5432/pickdriver_test" \
+            -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
+      - name: Test
+        run: swift test
+
