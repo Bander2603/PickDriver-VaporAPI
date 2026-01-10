@@ -35,6 +35,7 @@ let package = Package(
             name: "PickdriverVaporApiTests",
             dependencies: [
                 .target(name: "PickdriverVaporApi"),
+                .product(name: "XCTVapor", package: "vapor"),
                 .product(name: "VaporTesting", package: "vapor"),
             ],
             swiftSettings: swiftSettings
