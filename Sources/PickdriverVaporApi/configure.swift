@@ -20,6 +20,11 @@ public func configure(_ app: Application) async throws {
     let username = Environment.get("DATABASE_USERNAME") ?? "vapor_username"
     let password = Environment.get("DATABASE_PASSWORD") ?? "vapor_password"
     let dbName = Environment.get("DATABASE_NAME") ?? "vapor_database"
+    
+    if app.environment == .testing {
+        precondition(dbName.lowercased().contains("test"),
+                     "Refusing to run tests with non-test DATABASE_NAME: \(dbName)")
+    }
 
     var tls = TLSConfiguration.makeClientConfiguration()
     tls.certificateVerification = .none
@@ -34,7 +39,33 @@ public func configure(_ app: Application) async throws {
     )
 
     app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
+    
+    // Migrations (schema + indexes)
+    app.migrations.add(CreatePgTrgmExtension())
 
+    // Base tables
+    app.migrations.add(CreateSeasons())
+    app.migrations.add(CreateUsers())
+
+    // F1 domain
+    app.migrations.add(CreateF1Teams())
+    app.migrations.add(CreateDrivers())
+    app.migrations.add(CreateRaces())
+
+    // League domain
+    app.migrations.add(CreateLeagues())
+    app.migrations.add(CreateLeagueMembers())
+    app.migrations.add(CreateLeagueTeams())
+    app.migrations.add(CreateTeamMembers())
+
+    // Draft domain
+    app.migrations.add(CreateRaceDrafts())
+    app.migrations.add(CreatePlayerPicks())
+    app.migrations.add(CreatePlayerBans())
+
+    // Results + maintenance
+    app.migrations.add(CreateRaceResults())
+    app.migrations.add(CreateMaintenanceStats())
 
     // register routes
     try routes(app)
