@@ -10,7 +10,7 @@ import XCTVapor
 
 enum TestApp {
     static func make() async throws -> Application {
-        var env = Environment.testing
+        let env = Environment.testing
         let app = try await Application.make(env)
 
         // Safety guard: never hit prod

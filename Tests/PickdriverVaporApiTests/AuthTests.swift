@@ -9,226 +9,215 @@ import XCTVapor
 @testable import PickdriverVaporApi
 
 final class AuthTests: XCTestCase {
+
     func testRegisterThenProfileThenLogin() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
+        try await withTestApp { app in
+            let created = try await TestAuth.register(app: app)
 
-        let created = try await TestAuth.register(app: app)
+            // Profile (protected)
+            try await app.test(.GET, "/api/auth/profile", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: created.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+                let user = try res.content.decode(User.Public.self)
+                XCTAssertEqual(user.username, created.username)
+                XCTAssertEqual(user.email, created.email)
+            })
 
-        // Profile (protected)
-        try await app.test(.GET, "/api/auth/profile", beforeRequest: { req async throws in
-            req.headers.bearerAuthorization = .init(token: created.token)
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .ok)
-            let user = try res.content.decode(User.Public.self)
-            XCTAssertEqual(user.username, created.username)
-            XCTAssertEqual(user.email, created.email)
-        })
-
-        // Login
-        let auth = try await TestAuth.login(app: app, email: created.email, password: created.password)
-        XCTAssertFalse(auth.token.isEmpty)
-        XCTAssertEqual(auth.user.email, created.email)
+            // Login
+            let auth = try await TestAuth.login(app: app, email: created.email, password: created.password)
+            XCTAssertFalse(auth.token.isEmpty)
+            XCTAssertEqual(auth.user.email, created.email)
+        }
     }
 
     func testRegisterValidationUsernameTooShort() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
-
-        try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
-            try req.content.encode([
-                "username": "ab",
-                "email": "ab_\(UUID().uuidString.prefix(8))@test.com",
-                "password": "123456"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .badRequest)
-            let err = try res.content.decode(APIErrorResponse.self)
-            XCTAssertTrue(err.reason.contains("Username"))
-        })
+        try await withTestApp { app in
+            try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "username": "ab",
+                    "email": "ab_\(UUID().uuidString.prefix(8))@test.com",
+                    "password": "123456"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .badRequest)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.contains("Username"))
+            })
+        }
     }
 
     func testRegisterValidationPasswordTooShort() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
-
-        try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
-            try req.content.encode([
-                "username": "user_\(UUID().uuidString.prefix(8))",
-                "email": "pw_\(UUID().uuidString.prefix(8))@test.com",
-                "password": "12345"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .badRequest)
-            let err = try res.content.decode(APIErrorResponse.self)
-            XCTAssertTrue(err.reason.contains("Password"))
-        })
+        try await withTestApp { app in
+            try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "username": "user_\(UUID().uuidString.prefix(8))",
+                    "email": "pw_\(UUID().uuidString.prefix(8))@test.com",
+                    "password": "12345"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .badRequest)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.contains("Password"))
+            })
+        }
     }
 
     func testRegisterDuplicateEmailReturns409() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
+        try await withTestApp { app in
+            let email = "dup_\(UUID().uuidString.prefix(8))@test.com"
+            _ = try await TestAuth.register(app: app, email: email)
 
-        let email = "dup_\(UUID().uuidString.prefix(8))@test.com"
-        _ = try await TestAuth.register(app: app, email: email)
-
-        try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
-            try req.content.encode([
-                "username": "user_\(UUID().uuidString.prefix(8))",
-                "email": email,
-                "password": "123456"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .conflict)
-            let err = try res.content.decode(APIErrorResponse.self)
-            XCTAssertTrue(err.reason.lowercased().contains("email"))
-        })
+            try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "username": "user_\(UUID().uuidString.prefix(8))",
+                    "email": email,
+                    "password": "123456"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .conflict)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.lowercased().contains("email"))
+            })
+        }
     }
 
     func testRegisterDuplicateUsernameReturns409() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
+        try await withTestApp { app in
+            let username = "dupuser_\(UUID().uuidString.prefix(8))"
+            _ = try await TestAuth.register(app: app, username: username)
 
-        let username = "dupuser_\(UUID().uuidString.prefix(8))"
-        _ = try await TestAuth.register(app: app, username: username)
-
-        try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
-            try req.content.encode([
-                "username": username,
-                "email": "new_\(UUID().uuidString.prefix(8))@test.com",
-                "password": "123456"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .conflict)
-            let err = try res.content.decode(APIErrorResponse.self)
-            XCTAssertTrue(err.reason.lowercased().contains("username"))
-        })
+            try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "username": username,
+                    "email": "new_\(UUID().uuidString.prefix(8))@test.com",
+                    "password": "123456"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .conflict)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.lowercased().contains("username"))
+            })
+        }
     }
 
     func testLoginFailsWithWrongPassword() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
+        try await withTestApp { app in
+            let created = try await TestAuth.register(app: app, password: "123456")
 
-        let created = try await TestAuth.register(app: app, password: "123456")
-
-        try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
-            try req.content.encode([
-                "email": created.email,
-                "password": "wrongpass"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .unauthorized)
-            let err = try res.content.decode(APIErrorResponse.self)
-            XCTAssertTrue(err.reason.contains("Invalid"))
-        })
+            try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "email": created.email,
+                    "password": "wrongpass"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .unauthorized)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.contains("Invalid"))
+            })
+        }
     }
 
     func testLoginFailsWithUnknownEmail() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
-
-        try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
-            try req.content.encode([
-                "email": "unknown_\(UUID().uuidString.prefix(8))@test.com",
-                "password": "123456"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .unauthorized)
-            let err = try res.content.decode(APIErrorResponse.self)
-            XCTAssertTrue(err.reason.contains("Invalid"))
-        })
+        try await withTestApp { app in
+            try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "email": "unknown_\(UUID().uuidString.prefix(8))@test.com",
+                    "password": "123456"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .unauthorized)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.contains("Invalid"))
+            })
+        }
     }
 
     func testProfileRequiresToken() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
-
-        try await app.test(.GET, "/api/auth/profile", afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .unauthorized)
-        })
+        try await withTestApp { app in
+            try await app.test(.GET, "/api/auth/profile", afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .unauthorized)
+            })
+        }
     }
 
     func testUpdatePasswordHappyPathAndLoginWithNewPassword() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
+        try await withTestApp { app in
+            let created = try await TestAuth.register(app: app, password: "123456")
 
-        let created = try await TestAuth.register(app: app, password: "123456")
+            // Update password
+            try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: created.token)
+                try req.content.encode([
+                    "currentPassword": "123456",
+                    "newPassword": "654321"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+            })
 
-        // Update password
-        try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in
-            req.headers.bearerAuthorization = .init(token: created.token)
-            try req.content.encode([
-                "currentPassword": "123456",
-                "newPassword": "654321"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .ok)
-        })
+            // Old password should fail
+            try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "email": created.email,
+                    "password": "123456"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .unauthorized)
+            })
 
-        // Old password should fail
-        try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
-            try req.content.encode([
-                "email": created.email,
-                "password": "123456"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .unauthorized)
-        })
-
-        // New password should work
-        let auth = try await TestAuth.login(app: app, email: created.email, password: "654321")
-        XCTAssertFalse(auth.token.isEmpty)
+            // New password should work
+            let auth = try await TestAuth.login(app: app, email: created.email, password: "654321")
+            XCTAssertFalse(auth.token.isEmpty)
+        }
     }
 
     func testUpdatePasswordFailsWithWrongCurrentPassword() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
+        try await withTestApp { app in
+            let created = try await TestAuth.register(app: app, password: "123456")
 
-        let created = try await TestAuth.register(app: app, password: "123456")
-
-        try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in
-            req.headers.bearerAuthorization = .init(token: created.token)
-            try req.content.encode([
-                "currentPassword": "wrong",
-                "newPassword": "654321"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .unauthorized)
-            let err = try res.content.decode(APIErrorResponse.self)
-            XCTAssertTrue(err.reason.lowercased().contains("current password"))
-        })
+            try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: created.token)
+                try req.content.encode([
+                    "currentPassword": "wrong",
+                    "newPassword": "654321"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .unauthorized)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.lowercased().contains("current password"))
+            })
+        }
     }
 
     func testUpdatePasswordFailsWhenNewPasswordTooShort() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
+        try await withTestApp { app in
+            let created = try await TestAuth.register(app: app, password: "123456")
 
-        let created = try await TestAuth.register(app: app, password: "123456")
-
-        try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in
-            req.headers.bearerAuthorization = .init(token: created.token)
-            try req.content.encode([
-                "currentPassword": "123456",
-                "newPassword": "123"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .badRequest)
-            let err = try res.content.decode(APIErrorResponse.self)
-            XCTAssertTrue(err.reason.lowercased().contains("at least 6"))
-        })
+            try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: created.token)
+                try req.content.encode([
+                    "currentPassword": "123456",
+                    "newPassword": "123"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .badRequest)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.lowercased().contains("at least 6"))
+            })
+        }
     }
 
     func testUpdatePasswordRequiresToken() async throws {
-        let app = try await TestApp.make()
-        defer { Task { await TestApp.shutdown(app) } }
-
-        try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in
-            try req.content.encode([
-                "currentPassword": "123456",
-                "newPassword": "654321"
-            ])
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .unauthorized)
-        })
+        try await withTestApp { app in
+            try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "currentPassword": "123456",
+                    "newPassword": "654321"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .unauthorized)
+            })
+        }
     }
 }
