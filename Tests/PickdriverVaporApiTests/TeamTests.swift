@@ -142,7 +142,6 @@ final class TeamTests: XCTestCase {
                 teamsEnabled: true
             )
 
-            // make them members
             _ = try await joinLeague(app: app, token: u2.token, code: league.code)
             _ = try await joinLeague(app: app, token: u3.token, code: league.code)
             _ = try await joinLeague(app: app, token: u4.token, code: league.code)
@@ -162,13 +161,11 @@ final class TeamTests: XCTestCase {
             let teamID = try XCTUnwrap(team.id)
             XCTAssertEqual(team.name, "Team A")
 
-            // DB assertions: 2 assignments exist
             let members = try await TeamMember.query(on: app.db)
                 .filter(\.$team.$id == teamID)
                 .all()
 
             XCTAssertEqual(members.count, 2)
-
             let memberUserIDs = Set(members.map { $0.$user.id })
             XCTAssertTrue(memberUserIDs.contains(id1))
             XCTAssertTrue(memberUserIDs.contains(id2))
@@ -232,7 +229,6 @@ final class TeamTests: XCTestCase {
         try await withTestApp { app in
             _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
 
-            // 3 members => maxPerTeam = ceil(3/2)=2, so 3 user_ids must fail
             let creator = try await TestAuth.register(app: app)
             let u2 = try await TestAuth.register(app: app)
             let u3 = try await TestAuth.register(app: app)
@@ -261,7 +257,6 @@ final class TeamTests: XCTestCase {
         try await withTestApp { app in
             _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
 
-            // 4 members => maxPerTeam = 2
             let creator = try await TestAuth.register(app: app)
             let u2 = try await TestAuth.register(app: app)
             let u3 = try await TestAuth.register(app: app)
@@ -281,7 +276,6 @@ final class TeamTests: XCTestCase {
             let team = try await createTeam(app: app, token: creator.token, leagueID: leagueID, name: "Team A", userIDs: [id1, id2])
             let teamID = try XCTUnwrap(team.id)
 
-            // Update: rename + swap members to (u3,u4)
             var updated: LeagueTeam?
             try await app.test(.PUT, "/api/teams/\(teamID)", beforeRequest: { req async throws in
                 req.headers.bearerAuthorization = .init(token: creator.token)
@@ -293,7 +287,6 @@ final class TeamTests: XCTestCase {
 
             XCTAssertEqual(updated?.name, "Team A+")
 
-            // DB: members replaced
             let members = try await TeamMember.query(on: app.db)
                 .filter(\.$team.$id == teamID)
                 .all()
@@ -311,11 +304,16 @@ final class TeamTests: XCTestCase {
         try await withTestApp { app in
             _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
 
+            // IMPORTANT: need >= 4 league members so maxPerTeam >= 2
             let creator = try await TestAuth.register(app: app)
             let u2 = try await TestAuth.register(app: app)
+            let u3 = try await TestAuth.register(app: app)
+            let u4 = try await TestAuth.register(app: app)
 
-            let league = try await createLeague(app: app, token: creator.token, maxPlayers: 2, teamsEnabled: true)
+            let league = try await createLeague(app: app, token: creator.token, maxPlayers: 4, teamsEnabled: true)
             _ = try await joinLeague(app: app, token: u2.token, code: league.code)
+            _ = try await joinLeague(app: app, token: u3.token, code: league.code)
+            _ = try await joinLeague(app: app, token: u4.token, code: league.code)
 
             let leagueID = try XCTUnwrap(league.id)
             let id1 = try XCTUnwrap(creator.publicUser.id)
@@ -324,14 +322,12 @@ final class TeamTests: XCTestCase {
             let team = try await createTeam(app: app, token: creator.token, leagueID: leagueID, name: "Team A", userIDs: [id1, id2])
             let teamID = try XCTUnwrap(team.id)
 
-            // Delete
             try await app.test(.DELETE, "/api/teams/\(teamID)", beforeRequest: { req async throws in
                 req.headers.bearerAuthorization = .init(token: creator.token)
             }, afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .ok)
             })
 
-            // DB: team is gone, members are gone
             let dbTeam = try await LeagueTeam.find(teamID, on: app.db)
             XCTAssertNil(dbTeam)
 
@@ -347,13 +343,13 @@ final class TeamTests: XCTestCase {
         try await withTestApp { app in
             _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
 
-            // league maxPlayers=4 => assign endpoint uses maxPerTeam = league.maxPlayers / 2 = 2
             let creator = try await TestAuth.register(app: app)
             let u2 = try await TestAuth.register(app: app)
             let u3 = try await TestAuth.register(app: app)
             let u4 = try await TestAuth.register(app: app)
 
-            let league = try await createLeague(app: app, token: creator.token, maxPlayers: 4, teamsEnabled: true)
+            // IMPORTANT: maxPlayers must allow u5 to join later
+            let league = try await createLeague(app: app, token: creator.token, maxPlayers: 5, teamsEnabled: true)
             _ = try await joinLeague(app: app, token: u2.token, code: league.code)
             _ = try await joinLeague(app: app, token: u3.token, code: league.code)
             _ = try await joinLeague(app: app, token: u4.token, code: league.code)
@@ -367,10 +363,9 @@ final class TeamTests: XCTestCase {
             let teamA = try await createTeam(app: app, token: creator.token, leagueID: leagueID, name: "Team A", userIDs: [id1, id2])
             let teamAID = try XCTUnwrap(teamA.id)
 
-            let teamB = try await createTeam(app: app, token: creator.token, leagueID: leagueID, name: "Team B", userIDs: [id3, id4])
-            let teamBID = try XCTUnwrap(teamB.id)
+            _ = try await createTeam(app: app, token: creator.token, leagueID: leagueID, name: "Team B", userIDs: [id3, id4])
 
-            // Create a fresh member (u5) to assign via /assign
+            // u5 can join now (league maxPlayers=5)
             let u5 = try await TestAuth.register(app: app)
             _ = try await joinLeague(app: app, token: u5.token, code: league.code)
             let id5 = try XCTUnwrap(u5.publicUser.id)
@@ -385,11 +380,7 @@ final class TeamTests: XCTestCase {
                 XCTAssertTrue(err.reason.lowercased().contains("full"))
             })
 
-            // Remove one member from teamB by updating it to have only two other users? (it already has 2)
-            // Instead: create a new empty-ish team is not allowed (<2). So to test happy-path assign,
-            // we create a league with maxPlayers=6 where maxPerTeam=3, and then assign into a team with 2 members.
-
-            // Minimal happy-path assign in separate league:
+            // Happy-path assign in separate league with maxPlayers=6 => maxPerTeam=3
             let league2 = try await createLeague(app: app, token: creator.token, name: "Liga Assign OK", maxPlayers: 6, teamsEnabled: true)
             _ = try await joinLeague(app: app, token: u2.token, code: league2.code)
             _ = try await joinLeague(app: app, token: u3.token, code: league2.code)
@@ -398,7 +389,6 @@ final class TeamTests: XCTestCase {
             let team2 = try await createTeam(app: app, token: creator.token, leagueID: league2ID, name: "Team 2", userIDs: [id1, id2])
             let team2ID = try XCTUnwrap(team2.id)
 
-            // u3 is member of league2 and NOT assigned yet -> assign OK (maxPerTeam=3)
             try await app.test(.POST, "/api/teams/\(team2ID)/assign", beforeRequest: { req async throws in
                 req.headers.bearerAuthorization = .init(token: creator.token)
                 try req.content.encode(AssignUserPayload(userID: id3))
@@ -406,7 +396,7 @@ final class TeamTests: XCTestCase {
                 XCTAssertEqual(res.status, .ok)
             })
 
-            // Assign u3 again anywhere within same league2 -> 409 conflict "already assigned"
+            // Assign u3 again -> 409 conflict
             try await app.test(.POST, "/api/teams/\(team2ID)/assign", beforeRequest: { req async throws in
                 req.headers.bearerAuthorization = .init(token: creator.token)
                 try req.content.encode(AssignUserPayload(userID: id3))
