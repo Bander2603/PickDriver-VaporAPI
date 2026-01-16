@@ -57,19 +57,35 @@ struct DraftController: RouteCollection {
         let now = Date()
         
         let pickOrder = draft.pickOrder
+        guard draft.currentPickIndex >= 0 && draft.currentPickIndex < pickOrder.count else {
+            throw Abort(.badRequest, reason: "Draft is already completed")
+        }
+
         let isTeamLeague = try await League.find(leagueID, on: req.db)?.teamsEnabled ?? false
         let currentTurnUserID = pickOrder[draft.currentPickIndex]
         
         let isMyTurn = currentTurnUserID == userID
         var isTeammate = false
-        
+
         if isTeamLeague && now > deadlines.secondHalfDeadline.addingTimeInterval(-3600) {
-            isTeammate = try await TeamMember.query(on: req.db)
+            // Resolve team of current turn user and requesting user, within this league
+            let currentTurnTeamID = try await TeamMember.query(on: req.db)
                 .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
                 .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
                 .filter(TeamMember.self, \TeamMember.$user.$id == currentTurnUserID)
-                .filter(\TeamMember.$user.$id == userID)
-                .count() > 0
+                .first()?
+                .$team.id
+
+            let myTeamID = try await TeamMember.query(on: req.db)
+                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
+                .filter(TeamMember.self, \TeamMember.$user.$id == userID)
+                .first()?
+                .$team.id
+
+            if let a = currentTurnTeamID, let b = myTeamID {
+                isTeammate = (a == b)
+            }
         }
         
         guard isMyTurn || isTeammate else {
@@ -189,26 +205,45 @@ struct DraftController: RouteCollection {
         
         // Get pick positions
         let pickOrder = draft.pickOrder
+        guard draft.currentPickIndex >= 0 && draft.currentPickIndex < pickOrder.count else {
+            throw Abort(.badRequest, reason: "Draft is already completed")
+        }
         guard let userIndex = pickOrder.firstIndex(of: userID),
               let targetIndex = pickOrder.firstIndex(of: data.targetUserID) else {
             throw Abort(.badRequest, reason: "User not found in pick order")
         }
         
         // Ban permissions
-        let league = try await League.find(leagueID, on: req.db)
-        let isTeamLeague = league?.teamsEnabled ?? false
+        guard let league = try await League.find(leagueID, on: req.db) else {
+            throw Abort(.notFound, reason: "League not found")
+        }
+
+        guard league.bansEnabled else {
+            throw Abort(.badRequest, reason: "Bans are disabled in this league")
+        }
+
+        let isTeamLeague = league.teamsEnabled
         
         var validBan = targetIndex == userIndex - 1
         
         if !validBan && isTeamLeague {
-            let sameTeam = try await TeamMember.query(on: req.db)
+            let targetTeamID = try await TeamMember.query(on: req.db)
                 .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
                 .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
                 .filter(TeamMember.self, \TeamMember.$user.$id == data.targetUserID)
-                .filter(\TeamMember.$user.$id == userID)
-                .count() > 0
-            
-            validBan = sameTeam
+                .first()?
+                .$team.id
+
+            let myTeamID = try await TeamMember.query(on: req.db)
+                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
+                .filter(TeamMember.self, \TeamMember.$user.$id == userID)
+                .first()?
+                .$team.id
+
+            if let a = targetTeamID, let b = myTeamID {
+                validBan = (a == b)
+            }
         }
         
         guard validBan else {
