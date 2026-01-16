@@ -10,6 +10,15 @@ import XCTVapor
 
 final class RaceTests: XCTestCase {
 
+    private func assertDateEqualWithinOneSecond(_ a: Date?, _ b: Date?, file: StaticString = #filePath, line: UInt = #line) {
+        guard let a, let b else {
+            XCTFail("One of the dates is nil (a=\(String(describing: a)), b=\(String(describing: b)))", file: file, line: line)
+            return
+        }
+
+        XCTAssertEqual(a.timeIntervalSince1970, b.timeIntervalSince1970, accuracy: 1.0, file: file, line: line)
+    }
+
     func testGetAllRacesSortedByRound() async throws {
         try await withTestApp { app in
             let season = try await TestSeed.createSeason(app: app)
@@ -78,8 +87,10 @@ final class RaceTests: XCTestCase {
                 XCTAssertEqual(res.status, .ok)
                 let races = try res.content.decode([Race].self)
                 XCTAssertEqual(races.count, 2)
-                XCTAssertEqual(races.first?.raceTime, t1)
-                XCTAssertEqual(races.last?.raceTime, t2)
+
+                // Avoid flaky equality due to sub-seconds / JSON encoding differences
+                assertDateEqualWithinOneSecond(races.first?.raceTime, t1)
+                assertDateEqualWithinOneSecond(races.last?.raceTime, t2)
             })
         }
     }
