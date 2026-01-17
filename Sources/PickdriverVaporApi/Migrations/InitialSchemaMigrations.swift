@@ -392,7 +392,7 @@ struct CreatePlayerBans: AsyncMigration {
             draft_id integer NOT NULL,
             user_id integer,
             bans_remaining integer DEFAULT 2 NOT NULL,
-            team_id integer NOT NULL,
+            team_id integer,
             is_team_scope boolean DEFAULT false NOT NULL,
             CONSTRAINT player_bans_draft_id_fkey FOREIGN KEY (draft_id) REFERENCES public.race_drafts(id) ON DELETE CASCADE,
             CONSTRAINT player_bans_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
