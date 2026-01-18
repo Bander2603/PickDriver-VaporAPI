@@ -34,6 +34,32 @@ struct DraftController: RouteCollection {
         let yourTurn: Bool
         let yourDeadline: Date
     }
+
+    private func advanceExpiredTurns(
+        draft: RaceDraft,
+        deadlines: DraftDeadline,
+        now: Date,
+        db: any Database
+    ) async throws {
+        let pickOrder = draft.pickOrder
+        guard let firstUserID = pickOrder.first else { return }
+
+        var index = draft.currentPickIndex
+        var advanced = false
+
+        while index < pickOrder.count {
+            let currentUserID = pickOrder[index]
+            let deadline = currentUserID == firstUserID ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
+            if now <= deadline { break }
+            index += 1
+            advanced = true
+        }
+
+        if advanced {
+            draft.currentPickIndex = index
+            try await draft.save(on: db)
+        }
+    }
     
     func makePick(_ req: Request) async throws -> DraftResponse {
         let sql = req.db as! any SQLDatabase
@@ -51,11 +77,20 @@ struct DraftController: RouteCollection {
             .first() else {
             throw Abort(.notFound, reason: "Draft not found")
         }
-        
+
+        guard let race = try await Race.find(raceID, on: req.db) else {
+            throw Abort(.notFound, reason: "Race not found")
+        }
+
+        let now = Date()
+        if race.completed || (race.raceTime != nil && race.raceTime! < now) {
+            throw Abort(.badRequest, reason: "Race already started")
+        }
+
         let draftID = try draft.requireID()
         let deadlines = try await LeagueController().getDraftDeadlines(req)
-        let now = Date()
-        
+        try await advanceExpiredTurns(draft: draft, deadlines: deadlines, now: now, db: req.db)
+
         let pickOrder = draft.pickOrder
         guard draft.currentPickIndex >= 0 && draft.currentPickIndex < pickOrder.count else {
             throw Abort(.badRequest, reason: "Draft is already completed")
@@ -165,6 +200,15 @@ struct DraftController: RouteCollection {
             .first() else {
             throw Abort(.notFound, reason: "Draft not found")
         }
+
+        guard let race = try await Race.find(raceID, on: req.db) else {
+            throw Abort(.notFound, reason: "Race not found")
+        }
+
+        let now = Date()
+        if race.completed || (race.raceTime != nil && race.raceTime! < now) {
+            throw Abort(.badRequest, reason: "Race already started")
+        }
         
         let draftID = try draft.requireID()
         let data = try req.content.decode(BanRequest.self)
@@ -205,6 +249,9 @@ struct DraftController: RouteCollection {
         
         // Get pick positions
         let pickOrder = draft.pickOrder
+        let deadlines = try await LeagueController().getDraftDeadlines(req)
+        try await advanceExpiredTurns(draft: draft, deadlines: deadlines, now: now, db: req.db)
+
         guard draft.currentPickIndex >= 0 && draft.currentPickIndex < pickOrder.count else {
             throw Abort(.badRequest, reason: "Draft is already completed")
         }
@@ -306,9 +353,6 @@ struct DraftController: RouteCollection {
               AND user_id = \(bind: data.targetUserID)
               AND driver_id = \(bind: data.driverID)
         """).run()
-        
-        let deadlines = try await LeagueController().getDraftDeadlines(req)
-        let now = Date()
         
         // Special deadline handling
         if userID == pickOrder.first && data.targetUserID == pickOrder.last && now < deadlines.firstHalfDeadline {
