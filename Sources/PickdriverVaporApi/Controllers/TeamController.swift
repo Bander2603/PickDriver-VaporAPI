@@ -36,54 +36,57 @@ struct TeamController: RouteCollection {
         let data = try req.content.decode(Input.self)
         print("📝 Received team creation data: \(data)")
 
-        guard let league = try await League.find(data.leagueID, on: req.db),
-              league.status == "pending",
+        let league = try await LeagueAccess.requireMember(req, leagueID: data.leagueID)
+
+        guard league.status == "pending",
               league.teamsEnabled else {
             print("❌ Invalid league or conditions not met for team creation.")
             throw Abort(.badRequest, reason: "Team creation not allowed.")
         }
 
-        let memberCount = try await LeagueMember.query(on: req.db)
-            .filter(\.$league.$id == data.leagueID)
-            .count()
+        let memberCount = try await TeamBalance.requireLeagueFull(req, league: league)
+        let maxTeams = try await TeamBalance.maxTeams(for: req, league: league, totalPlayers: memberCount)
 
-        guard let userIDs = data.userIDs, userIDs.count >= 2 else {
+        guard let userIDs = data.userIDs, !userIDs.isEmpty else {
             throw Abort(.badRequest, reason: "A team must have at least 2 players.")
         }
 
-        let maxPerTeam = Int(ceil(Double(memberCount) / 2.0))
-        guard userIDs.count <= maxPerTeam else {
-            throw Abort(.badRequest, reason: "A team can have at most \(maxPerTeam) players.")
+        let requestedUserIDs = Array(Set(userIDs))
+        guard requestedUserIDs.count == userIDs.count else {
+            throw Abort(.badRequest, reason: "Duplicate user IDs are not allowed.")
         }
 
-        let teamCount = try await LeagueTeam.query(on: req.db)
+        guard requestedUserIDs.count >= TeamBalance.minTeamSize else {
+            throw Abort(.badRequest, reason: "A team must have at least 2 players.")
+        }
+
+        let members = try await LeagueMember.query(on: req.db)
             .filter(\.$league.$id == data.leagueID)
-            .count()
+            .all()
+        let memberIDs = Set(members.map { $0.$user.id })
 
-        guard teamCount < memberCount / 2 else {
-            print("❌ Too many teams already: \(teamCount) / \(memberCount)")
-            throw Abort(.badRequest, reason: "Too many teams already.")
+        guard requestedUserIDs.allSatisfy(memberIDs.contains) else {
+            throw Abort(.badRequest, reason: "All users must be members of the league.")
         }
+
+        let assigned = try await TeamMember.query(on: req.db)
+            .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+            .filter(LeagueTeam.self, \LeagueTeam.$league.$id == data.leagueID)
+            .all()
+        let assignedUserIDs = Set(assigned.map { $0.$user.id })
+
+        if requestedUserIDs.contains(where: { assignedUserIDs.contains($0) }) {
+            throw Abort(.conflict, reason: "One or more users are already assigned to a team in this league.")
+        }
+
+        let currentTeamSizes = try await TeamBalance.teamSizes(for: req, leagueID: data.leagueID)
+        let prospectiveSizes = currentTeamSizes.map { $0.size } + [requestedUserIDs.count]
+        try TeamBalance.validate(totalPlayers: memberCount, teamSizes: prospectiveSizes, maxTeams: maxTeams)
 
         let team = LeagueTeam(name: data.name, leagueID: data.leagueID)
         try await team.save(on: req.db)
 
-        for userID in userIDs {
-            let isMember = try await LeagueMember.query(on: req.db)
-                .filter(\.$user.$id == userID)
-                .filter(\.$league.$id == data.leagueID)
-                .first() != nil
-
-            guard isMember else { continue }
-
-            let existingTeam = try await TeamMember.query(on: req.db)
-                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
-                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == data.leagueID)
-                .filter(TeamMember.self, \TeamMember.$user.$id == userID)
-                .first()
-
-            guard existingTeam == nil else { continue }
-
+        for userID in requestedUserIDs {
             let assignment = TeamMember(userID: userID, teamID: try team.requireID())
             try await assignment.save(on: req.db)
         }
@@ -122,44 +125,75 @@ struct TeamController: RouteCollection {
             throw Abort(.badRequest, reason: "Cannot edit team.")
         }
 
-        let memberCount = try await LeagueMember.query(on: req.db)
-            .filter(\.$league.$id == league.requireID())
-            .count()
+        try await LeagueAccess.requireMember(req, league: league)
 
-        guard let userIDs = data.userIDs, userIDs.count >= 2 else {
+        let memberCount = try await TeamBalance.requireLeagueFull(req, league: league)
+        let maxTeams = try await TeamBalance.maxTeams(for: req, league: league, totalPlayers: memberCount)
+
+        guard let userIDs = data.userIDs, !userIDs.isEmpty else {
             throw Abort(.badRequest, reason: "A team must have at least 2 players.")
         }
 
-        let maxPerTeam = Int(ceil(Double(memberCount) / 2.0))
-        guard userIDs.count <= maxPerTeam else {
-            throw Abort(.badRequest, reason: "A team can have at most \(maxPerTeam) players.")
+        let requestedUserIDs = Array(Set(userIDs))
+        guard requestedUserIDs.count == userIDs.count else {
+            throw Abort(.badRequest, reason: "Duplicate user IDs are not allowed.")
         }
+
+        guard requestedUserIDs.count >= TeamBalance.minTeamSize else {
+            throw Abort(.badRequest, reason: "A team must have at least 2 players.")
+        }
+
+        let members = try await LeagueMember.query(on: req.db)
+            .filter(\.$league.$id == league.requireID())
+            .all()
+        let memberIDs = Set(members.map { $0.$user.id })
+
+        guard requestedUserIDs.allSatisfy(memberIDs.contains) else {
+            throw Abort(.badRequest, reason: "All users must be members of the league.")
+        }
+
+        let teamID = try team.requireID()
+        let assigned = try await TeamMember.query(on: req.db)
+            .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+            .filter(LeagueTeam.self, \LeagueTeam.$league.$id == league.requireID())
+            .all()
+
+        let assignedUserIDs = Set(assigned.map { $0.$user.id })
+        let currentTeamUserIDs = Set(assigned.filter { $0.$team.id == teamID }.map { $0.$user.id })
+        let otherTeamUserIDs = assignedUserIDs.subtracting(currentTeamUserIDs)
+
+        if requestedUserIDs.contains(where: { otherTeamUserIDs.contains($0) }) {
+            throw Abort(.conflict, reason: "One or more users are already assigned to another team in this league.")
+        }
+
+        let currentTeamSizes = try await TeamBalance.teamSizes(for: req, leagueID: league.requireID())
+        var prospectiveSizes: [Int] = []
+        var replaced = false
+
+        for (id, size) in currentTeamSizes {
+            if id == teamID {
+                prospectiveSizes.append(requestedUserIDs.count)
+                replaced = true
+            } else {
+                prospectiveSizes.append(size)
+            }
+        }
+
+        guard replaced else {
+            throw Abort(.internalServerError, reason: "Team not found in league.")
+        }
+
+        try TeamBalance.validate(totalPlayers: memberCount, teamSizes: prospectiveSizes, maxTeams: maxTeams)
 
         team.name = data.name
         try await team.save(on: req.db)
 
-        let teamID = try team.requireID()
         try await TeamMember.query(on: req.db)
             .filter(\.$team.$id == teamID)
             .delete()
 
-        for userID in userIDs {
-            let isMember = try await LeagueMember.query(on: req.db)
-                .filter(\.$user.$id == userID)
-                .filter(\.$league.$id == league.requireID())
-                .first() != nil
-
-            guard isMember else { continue }
-
-            let existingTeam = try await TeamMember.query(on: req.db)
-                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
-                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == league.requireID())
-                .filter(TeamMember.self, \TeamMember.$user.$id == userID)
-                .first()
-
-            guard existingTeam == nil else { continue }
-
-            let assignment = TeamMember(userID: userID, teamID: try team.requireID())
+        for userID in requestedUserIDs {
+            let assignment = TeamMember(userID: userID, teamID: teamID)
             try await assignment.save(on: req.db)
         }
 
@@ -184,9 +218,20 @@ struct TeamController: RouteCollection {
             throw Abort(.badRequest, reason: "Cannot delete team.")
         }
 
+        try await LeagueAccess.requireMember(req, league: league)
+
+        let memberCount = try await TeamBalance.requireLeagueFull(req, league: league)
+        let maxTeams = try await TeamBalance.maxTeams(for: req, league: league, totalPlayers: memberCount)
+
+        let leagueID = try league.requireID()
+        let teamID = try team.requireID()
+        let currentTeamSizes = try await TeamBalance.teamSizes(for: req, leagueID: leagueID)
+        let filteredSizes = currentTeamSizes.filter { $0.teamID != teamID }.map { $0.size }
+        try TeamBalance.validate(totalPlayers: memberCount, teamSizes: filteredSizes, maxTeams: maxTeams)
+
         // Remove team members
         let members = try await TeamMember.query(on: req.db)
-            .filter(\.$team.$id == team.requireID())
+            .filter(\.$team.$id == teamID)
             .all()
 
         for member in members {
@@ -222,14 +267,7 @@ struct TeamController: RouteCollection {
             throw Abort(.badRequest, reason: "Team assignment not allowed in this league")
         }
 
-        let memberExists = try await LeagueMember.query(on: req.db)
-            .filter(\.$user.$id == data.userID)
-            .filter(\.$league.$id == league.requireID())
-            .first() != nil
-
-        guard memberExists else {
-            throw Abort(.badRequest, reason: "User is not a member of this league")
-        }
+        try await LeagueAccess.requireMember(req, league: league)
 
         let existingTeam = try await TeamMember.query(on: req.db)
             .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
@@ -241,14 +279,38 @@ struct TeamController: RouteCollection {
             throw Abort(.conflict, reason: "User is already assigned to a team in this league")
         }
 
-        let currentMembers = try await TeamMember.query(on: req.db)
-            .filter(\.$team.$id == team.requireID())
-            .count()
+        let memberCount = try await TeamBalance.requireLeagueFull(req, league: league)
+        let maxTeams = try await TeamBalance.maxTeams(for: req, league: league, totalPlayers: memberCount)
 
-        let maxPerTeam = league.maxPlayers / 2
-        guard currentMembers < maxPerTeam else {
-            throw Abort(.conflict, reason: "Team is already full")
+        let memberExists = try await LeagueMember.query(on: req.db)
+            .filter(\.$user.$id == data.userID)
+            .filter(\.$league.$id == league.requireID())
+            .first() != nil
+
+        guard memberExists else {
+            throw Abort(.badRequest, reason: "User is not a member of this league")
         }
+
+        let currentTeamSizes = try await TeamBalance.teamSizes(for: req, leagueID: league.requireID())
+        let targetTeamID = try team.requireID()
+
+        var prospectiveSizes: [Int] = []
+        var found = false
+
+        for (id, size) in currentTeamSizes {
+            if id == targetTeamID {
+                prospectiveSizes.append(size + 1)
+                found = true
+            } else {
+                prospectiveSizes.append(size)
+            }
+        }
+
+        guard found else {
+            throw Abort(.internalServerError, reason: "Team not found in league.")
+        }
+
+        try TeamBalance.validate(totalPlayers: memberCount, teamSizes: prospectiveSizes, maxTeams: maxTeams)
 
         let assignment = TeamMember(userID: data.userID, teamID: try team.requireID())
         try await assignment.save(on: req.db)
@@ -256,3 +318,4 @@ struct TeamController: RouteCollection {
         return .ok
     }
 }
+

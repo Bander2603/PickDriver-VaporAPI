@@ -197,6 +197,23 @@ final class DraftPickTests: XCTestCase {
         return (isBanned: r.is_banned, bannedBy: r.banned_by)
     }
 
+    private func fetchMirrorFlag(app: Application, draftID: Int, userID: Int, driverID: Int) async throws -> Bool? {
+        let sql = try sql(app)
+        struct Row: Decodable { let is_mirror_pick: Bool }
+
+        let row = try await sql.raw("""
+            SELECT is_mirror_pick
+            FROM player_picks
+            WHERE draft_id = \(bind: draftID)
+              AND user_id = \(bind: userID)
+              AND driver_id = \(bind: driverID)
+            ORDER BY id DESC
+            LIMIT 1
+        """).first(decoding: Row.self)
+
+        return row?.is_mirror_pick
+    }
+
     private func fetchBansRemaining(app: Application, draftID: Int, userID: Int) async throws -> Int? {
         let sql = try sql(app)
         struct Row: Decodable { let bans_remaining: Int }
@@ -227,7 +244,10 @@ final class DraftPickTests: XCTestCase {
 
     // MARK: - Seed Scenario
 
-    private func seedSimpleDraft3Players(app: Application) async throws -> (
+    private func seedSimpleDraft3Players(
+        app: Application,
+        mirrorEnabled: Bool = false
+    ) async throws -> (
         leagueID: Int,
         raceID: Int,
         fp1: Date,
@@ -255,7 +275,17 @@ final class DraftPickTests: XCTestCase {
         let d1 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "A", lastName: "One", driverNumber: 11, driverCode: "A11")
         let d2 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "B", lastName: "Two", driverNumber: 22, driverCode: "B22")
         let d3 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "C", lastName: "Three", driverNumber: 33, driverCode: "C33")
-        let driverIDs = [try d1.requireID(), try d2.requireID(), try d3.requireID()]
+        let d4 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "D", lastName: "Four", driverNumber: 44, driverCode: "D44")
+        let d5 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "E", lastName: "Five", driverNumber: 55, driverCode: "E55")
+        let d6 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "F", lastName: "Six", driverNumber: 66, driverCode: "F66")
+        let driverIDs = [
+            try d1.requireID(),
+            try d2.requireID(),
+            try d3.requireID(),
+            try d4.requireID(),
+            try d5.requireID(),
+            try d6.requireID()
+        ]
 
         let u1 = try await TestAuth.register(app: app)
         let u2 = try await TestAuth.register(app: app)
@@ -268,7 +298,7 @@ final class DraftPickTests: XCTestCase {
             maxPlayers: 3,
             teamsEnabled: false,
             bansEnabled: true,
-            mirrorEnabled: false
+            mirrorEnabled: mirrorEnabled
         )
         let leagueID = try XCTUnwrap(league.id)
 
@@ -486,6 +516,44 @@ final class DraftPickTests: XCTestCase {
                 driverID: pickedDriverID,
                 expectedStatus: .ok
             )
+        }
+    }
+
+    func testMirrorDraftAllowsSecondPickForSameUser_setsMirrorFlag() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraft3Players(app: app, mirrorEnabled: true)
+
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertEqual(order.count, seeded.users.map.count * 2)
+            XCTAssertGreaterThanOrEqual(seeded.driverIDs.count, order.count)
+
+            let draftRow = try await fetchRaceDraftRow(app: app, leagueID: seeded.leagueID, raceID: seeded.raceID)
+
+            var pickCounts: [Int: Int] = [:]
+            var checked = false
+
+            for (index, userID) in order.enumerated() {
+                let driverID = seeded.driverIDs[index]
+                _ = try await makePick(
+                    app: app,
+                    token: seeded.users.token(for: userID),
+                    leagueID: seeded.leagueID,
+                    raceID: seeded.raceID,
+                    driverID: driverID,
+                    expectedStatus: .ok
+                )
+
+                pickCounts[userID, default: 0] += 1
+                if pickCounts[userID] == 2 {
+                    let mirrorFlag = try await fetchMirrorFlag(app: app, draftID: draftRow.draftID, userID: userID, driverID: driverID)
+                    XCTAssertEqual(mirrorFlag, true)
+                    checked = true
+                    break
+                }
+            }
+
+            XCTAssertTrue(checked)
         }
     }
 }

@@ -209,7 +209,14 @@ final class TeamTests: XCTestCase {
             _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
 
             let creator = try await TestAuth.register(app: app)
-            let league = try await createLeague(app: app, token: creator.token, maxPlayers: 2, teamsEnabled: true)
+            let u2 = try await TestAuth.register(app: app)
+            let u3 = try await TestAuth.register(app: app)
+            let u4 = try await TestAuth.register(app: app)
+            let league = try await createLeague(app: app, token: creator.token, maxPlayers: 4, teamsEnabled: true)
+
+            _ = try await joinLeague(app: app, token: u2.token, code: league.code)
+            _ = try await joinLeague(app: app, token: u3.token, code: league.code)
+            _ = try await joinLeague(app: app, token: u4.token, code: league.code)
 
             let leagueID = try XCTUnwrap(league.id)
             let id1 = try XCTUnwrap(creator.publicUser.id)
@@ -232,10 +239,12 @@ final class TeamTests: XCTestCase {
             let creator = try await TestAuth.register(app: app)
             let u2 = try await TestAuth.register(app: app)
             let u3 = try await TestAuth.register(app: app)
+            let u4 = try await TestAuth.register(app: app)
 
-            let league = try await createLeague(app: app, token: creator.token, maxPlayers: 3, teamsEnabled: true)
+            let league = try await createLeague(app: app, token: creator.token, maxPlayers: 4, teamsEnabled: true)
             _ = try await joinLeague(app: app, token: u2.token, code: league.code)
             _ = try await joinLeague(app: app, token: u3.token, code: league.code)
+            _ = try await joinLeague(app: app, token: u4.token, code: league.code)
 
             let leagueID = try XCTUnwrap(league.id)
             let id1 = try XCTUnwrap(creator.publicUser.id)
@@ -248,7 +257,7 @@ final class TeamTests: XCTestCase {
             }, afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .badRequest)
                 let err = try res.content.decode(APIErrorResponse.self)
-                XCTAssertTrue(err.reason.lowercased().contains("at most"))
+                XCTAssertTrue(err.reason.lowercased().contains("balanced"))
             })
         }
     }
@@ -348,11 +357,14 @@ final class TeamTests: XCTestCase {
             let u3 = try await TestAuth.register(app: app)
             let u4 = try await TestAuth.register(app: app)
 
-            // IMPORTANT: maxPlayers must allow u5 to join later
             let league = try await createLeague(app: app, token: creator.token, maxPlayers: 5, teamsEnabled: true)
             _ = try await joinLeague(app: app, token: u2.token, code: league.code)
             _ = try await joinLeague(app: app, token: u3.token, code: league.code)
             _ = try await joinLeague(app: app, token: u4.token, code: league.code)
+
+            let u5 = try await TestAuth.register(app: app)
+            _ = try await joinLeague(app: app, token: u5.token, code: league.code)
+            let id5 = try XCTUnwrap(u5.publicUser.id)
 
             let leagueID = try XCTUnwrap(league.id)
             let id1 = try XCTUnwrap(creator.publicUser.id)
@@ -365,25 +377,23 @@ final class TeamTests: XCTestCase {
 
             _ = try await createTeam(app: app, token: creator.token, leagueID: leagueID, name: "Team B", userIDs: [id3, id4])
 
-            // u5 can join now (league maxPlayers=5)
-            let u5 = try await TestAuth.register(app: app)
-            _ = try await joinLeague(app: app, token: u5.token, code: league.code)
-            let id5 = try XCTUnwrap(u5.publicUser.id)
-
-            // Assign u5 to teamA should FAIL because teamA is full (2/2) -> 409
+            // Assign u5 to teamA should be allowed (teams of size 2 and 3 are balanced)
             try await app.test(.POST, "/api/teams/\(teamAID)/assign", beforeRequest: { req async throws in
                 req.headers.bearerAuthorization = .init(token: creator.token)
                 try req.content.encode(AssignUserPayload(userID: id5))
             }, afterResponse: { res async throws in
-                XCTAssertEqual(res.status, .conflict)
-                let err = try res.content.decode(APIErrorResponse.self)
-                XCTAssertTrue(err.reason.lowercased().contains("full"))
+                XCTAssertEqual(res.status, .ok)
             })
 
-            // Happy-path assign in separate league with maxPlayers=6 => maxPerTeam=3
+            // Happy-path assign in separate league with maxPlayers=6 (balanced sizes allow 3)
             let league2 = try await createLeague(app: app, token: creator.token, name: "Liga Assign OK", maxPlayers: 6, teamsEnabled: true)
             _ = try await joinLeague(app: app, token: u2.token, code: league2.code)
             _ = try await joinLeague(app: app, token: u3.token, code: league2.code)
+            _ = try await joinLeague(app: app, token: u4.token, code: league2.code)
+            _ = try await joinLeague(app: app, token: u5.token, code: league2.code)
+
+            let u6 = try await TestAuth.register(app: app)
+            _ = try await joinLeague(app: app, token: u6.token, code: league2.code)
 
             let league2ID = try XCTUnwrap(league2.id)
             let team2 = try await createTeam(app: app, token: creator.token, leagueID: league2ID, name: "Team 2", userIDs: [id1, id2])

@@ -81,6 +81,8 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid league ID.")
         }
 
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+
         let members = try await LeagueMember.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .with(\.$user)
@@ -95,6 +97,8 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid league ID.")
         }
 
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+
         return try await LeagueTeam.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .with(\.$members)
@@ -107,6 +111,9 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid league ID.")
         }
 
+        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        try LeagueAccess.requireOwner(req, league: league)
+
         let members = try await LeagueMember.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .all()
@@ -114,9 +121,6 @@ struct LeagueController: RouteCollection {
         guard !members.isEmpty else {
             throw Abort(.badRequest, reason: "No members found in this league.")
         }
-
-        let league = try await League.find(leagueID, on: req.db)
-            ?? { throw Abort(.notFound, reason: "League not found") }()
 
         var pickOrderMembers: [LeagueMember] = []
 
@@ -168,9 +172,12 @@ struct LeagueController: RouteCollection {
     
     func activateDraft(_ req: Request) async throws -> HTTPStatus {
         let _ = try req.auth.require(User.self)
-        guard let leagueID = req.parameters.get("leagueID", as: Int.self),
-              let league = try await League.find(leagueID, on: req.db)
-        else { throw Abort(.badRequest, reason: "Invalid league ID") }
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID")
+        }
+
+        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        try LeagueAccess.requireOwner(req, league: league)
 
         guard league.status == "pending" else {
             throw Abort(.badRequest, reason: "League must be pending to start the draft.")
@@ -287,6 +294,8 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "Missing or invalid leagueID/raceID.")
         }
 
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+
         guard let draft = try await RaceDraft.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .filter(\.$raceID == raceID)
@@ -305,6 +314,8 @@ struct LeagueController: RouteCollection {
               let raceID = req.parameters.get("raceID", as: Int.self) else {
             throw Abort(.badRequest, reason: "Missing or invalid leagueID/raceID.")
         }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
 
         guard let race = try await Race.find(raceID, on: req.db),
               let fp1 = race.fp1Time else {
@@ -335,6 +346,9 @@ struct LeagueController: RouteCollection {
               let raceID = req.parameters.get("raceID", as: Int.self) else {
             throw Abort(.badRequest, reason: "Invalid leagueID/raceID.")
         }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+
         guard let draft = try await RaceDraft.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .filter(\.$raceID == raceID)

@@ -78,6 +78,8 @@ struct DraftController: RouteCollection {
             throw Abort(.notFound, reason: "Draft not found")
         }
 
+        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+
         guard let race = try await Race.find(raceID, on: req.db) else {
             throw Abort(.notFound, reason: "Race not found")
         }
@@ -96,8 +98,8 @@ struct DraftController: RouteCollection {
             throw Abort(.badRequest, reason: "Draft is already completed")
         }
 
-        let isTeamLeague = try await League.find(leagueID, on: req.db)?.teamsEnabled ?? false
         let currentTurnUserID = pickOrder[draft.currentPickIndex]
+        let isTeamLeague = league.teamsEnabled
         
         let isMyTurn = currentTurnUserID == userID
         var isTeammate = false
@@ -129,11 +131,14 @@ struct DraftController: RouteCollection {
         
         let data = try req.content.decode(PickRequest.self)
         
+        let isMirrorPick = draft.mirrorPicks && pickOrder.prefix(draft.currentPickIndex).contains(currentTurnUserID)
+
         let existingPick = try await sql.raw("""
             SELECT 1 FROM player_picks
             WHERE draft_id = \(bind: draftID)
               AND user_id = \(bind: currentTurnUserID)
               AND is_banned = false
+              AND is_mirror_pick = \(bind: isMirrorPick)
             LIMIT 1
         """).first()
         
@@ -163,8 +168,8 @@ struct DraftController: RouteCollection {
         }
         
         try await sql.raw("""
-            INSERT INTO player_picks (draft_id, user_id, driver_id, is_banned, picked_at)
-            VALUES (\(bind: draftID), \(bind: currentTurnUserID), \(bind: data.driverID), false, NOW())
+            INSERT INTO player_picks (draft_id, user_id, driver_id, is_banned, is_mirror_pick, picked_at)
+            VALUES (\(bind: draftID), \(bind: currentTurnUserID), \(bind: data.driverID), false, \(bind: isMirrorPick), NOW())
         """).run()
         
         draft.currentPickIndex += 1
@@ -200,6 +205,8 @@ struct DraftController: RouteCollection {
             .first() else {
             throw Abort(.notFound, reason: "Draft not found")
         }
+
+        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
 
         guard let race = try await Race.find(raceID, on: req.db) else {
             throw Abort(.notFound, reason: "Race not found")
@@ -255,29 +262,29 @@ struct DraftController: RouteCollection {
         guard draft.currentPickIndex >= 0 && draft.currentPickIndex < pickOrder.count else {
             throw Abort(.badRequest, reason: "Draft is already completed")
         }
-        guard let userIndex = pickOrder.firstIndex(of: userID),
-              let targetIndex = pickOrder.firstIndex(of: data.targetUserID) else {
-            throw Abort(.badRequest, reason: "User not found in pick order")
-        }
-        
-        // Ban permissions
-        guard let league = try await League.find(leagueID, on: req.db) else {
-            throw Abort(.notFound, reason: "League not found")
+        guard draft.currentPickIndex > 0 else {
+            throw Abort(.badRequest, reason: "No previous pick to ban")
         }
 
+        let currentTurnUserID = pickOrder[draft.currentPickIndex]
+        let targetIndex = draft.currentPickIndex - 1
+        let expectedTargetUserID = pickOrder[targetIndex]
+        
+        // Ban permissions
         guard league.bansEnabled else {
             throw Abort(.badRequest, reason: "Bans are disabled in this league")
         }
 
         let isTeamLeague = league.teamsEnabled
-        
-        var validBan = targetIndex == userIndex - 1
-        
-        if !validBan && isTeamLeague {
-            let targetTeamID = try await TeamMember.query(on: req.db)
+
+        let isMyTurn = currentTurnUserID == userID
+        var isTeammate = false
+
+        if !isMyTurn && isTeamLeague {
+            let currentTurnTeamID = try await TeamMember.query(on: req.db)
                 .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
                 .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
-                .filter(TeamMember.self, \TeamMember.$user.$id == data.targetUserID)
+                .filter(TeamMember.self, \TeamMember.$user.$id == currentTurnUserID)
                 .first()?
                 .$team.id
 
@@ -288,12 +295,16 @@ struct DraftController: RouteCollection {
                 .first()?
                 .$team.id
 
-            if let a = targetTeamID, let b = myTeamID {
-                validBan = (a == b)
+            if let a = currentTurnTeamID, let b = myTeamID {
+                isTeammate = (a == b)
             }
         }
-        
-        guard validBan else {
+
+        guard isMyTurn || isTeammate else {
+            throw Abort(.forbidden, reason: "It's not your turn to ban")
+        }
+
+        guard data.targetUserID == expectedTargetUserID else {
             throw Abort(.forbidden, reason: "You can only ban the previous pick")
         }
         
