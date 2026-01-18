@@ -16,7 +16,7 @@ struct UserAuthenticator: AsyncMiddleware {
             throw Abort(.unauthorized, reason: "Missing Bearer token")
         }
 
-        print("🟢 [AUTH] Raw token: \(bearer.token)")
+        print("🟢 [AUTH] Bearer token received")
 
         // 1) Verify JWT ONLY (and only catch JWT verification errors)
         let payload: UserPayload

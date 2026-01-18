@@ -23,15 +23,17 @@ func routes(_ app: Application) throws {
     try protected.grouped("players").register(collection: PlayerController())
 
     // 🧪 Simple test endpoints (non-API path)
-    app.get { req in
-        "PickDriver Vapor API is live 🚀"
-    }
+    if app.environment != .production {
+        app.get { req in
+            "PickDriver Vapor API is live 🚀"
+        }
 
-    app.get("test") { req in
-        "This is a test 🚀"
-    }
+        app.get("test") { req in
+            "This is a test 🚀"
+        }
 
-    app.get("races") { req async throws -> [Race] in
-        try await Race.query(on: req.db).all()
+        app.get("races") { req async throws -> [Race] in
+            try await Race.query(on: req.db).all()
+        }
     }
 }

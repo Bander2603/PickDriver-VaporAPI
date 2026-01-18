@@ -42,14 +42,14 @@ struct DraftController: RouteCollection {
         db: any Database
     ) async throws {
         let pickOrder = draft.pickOrder
-        guard let firstUserID = pickOrder.first else { return }
+        guard !pickOrder.isEmpty else { return }
 
         var index = draft.currentPickIndex
         var advanced = false
+        let firstHalfCount = (pickOrder.count + 1) / 2
 
         while index < pickOrder.count {
-            let currentUserID = pickOrder[index]
-            let deadline = currentUserID == firstUserID ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
+            let deadline = index < firstHalfCount ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
             if now <= deadline { break }
             index += 1
             advanced = true
@@ -130,6 +130,14 @@ struct DraftController: RouteCollection {
         }
         
         let data = try req.content.decode(PickRequest.self)
+
+        guard let driver = try await Driver.find(data.driverID, on: req.db) else {
+            throw Abort(.notFound, reason: "Driver not found")
+        }
+
+        guard driver.seasonID == race.seasonID else {
+            throw Abort(.badRequest, reason: "Driver is not in this season")
+        }
         
         let isMirrorPick = draft.mirrorPicks && pickOrder.prefix(draft.currentPickIndex).contains(currentTurnUserID)
 

@@ -204,45 +204,52 @@ struct LeagueController: RouteCollection {
             }
         }
 
-        // 🔀 Fair randomized pick order with team interleaving
+        // 🔀 Use assigned pick order if present; otherwise compute a fair randomized order
         var pickOrderMembers: [LeagueMember] = []
+        let assignedOrders = members.compactMap { $0.pickOrder }
+        let hasAssignedOrder = assignedOrders.count == members.count
+            && Set(assignedOrders).count == members.count
 
-        if league.teamsEnabled {
-            let teamAssignments = try await TeamMember.query(on: req.db)
-                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
-                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
-                .all()
+        if hasAssignedOrder {
+            pickOrderMembers = members.sorted { ($0.pickOrder ?? 0) < ($1.pickOrder ?? 0) }
+        } else {
+            if league.teamsEnabled {
+                let teamAssignments = try await TeamMember.query(on: req.db)
+                    .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+                    .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
+                    .all()
 
-            var teamMap: [Int: [LeagueMember]] = [:]
-            for member in members {
-                if let teamEntry = teamAssignments.first(where: { $0.$user.id == member.$user.id }) {
-                    let teamID = teamEntry.$team.id
-                    teamMap[teamID, default: []].append(member)
-                }
-            }
-
-            for (teamID, list) in teamMap {
-                teamMap[teamID] = list.shuffled()
-            }
-
-            let teamIDs = teamMap.keys.shuffled()
-            var index = 0
-            while pickOrderMembers.count < members.count {
-                for teamID in teamIDs {
-                    if let list = teamMap[teamID], index < list.count {
-                        pickOrderMembers.append(list[index])
+                var teamMap: [Int: [LeagueMember]] = [:]
+                for member in members {
+                    if let teamEntry = teamAssignments.first(where: { $0.$user.id == member.$user.id }) {
+                        let teamID = teamEntry.$team.id
+                        teamMap[teamID, default: []].append(member)
                     }
                 }
-                index += 1
+
+                for (teamID, list) in teamMap {
+                    teamMap[teamID] = list.shuffled()
+                }
+
+                let teamIDs = teamMap.keys.shuffled()
+                var index = 0
+                while pickOrderMembers.count < members.count {
+                    for teamID in teamIDs {
+                        if let list = teamMap[teamID], index < list.count {
+                            pickOrderMembers.append(list[index])
+                        }
+                    }
+                    index += 1
+                }
+
+            } else {
+                pickOrderMembers = members.shuffled()
             }
 
-        } else {
-            pickOrderMembers = members.shuffled()
-        }
-
-        for (index, member) in pickOrderMembers.enumerated() {
-            member.pickOrder = index + 1
-            try await member.save(on: req.db)
+            for (index, member) in pickOrderMembers.enumerated() {
+                member.pickOrder = index + 1
+                try await member.save(on: req.db)
+            }
         }
 
         // 🎯 First upcoming race
