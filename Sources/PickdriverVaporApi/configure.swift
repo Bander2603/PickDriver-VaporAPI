@@ -63,6 +63,8 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreatePlayerPicks())
     app.migrations.add(AddUniqueDriverPickPerDraft())
     app.migrations.add(CreatePlayerBans())
+    app.migrations.add(AddAutoPickToPlayerPicks())
+    app.migrations.add(CreatePlayerAutopicks())
 
     // Results + maintenance
     app.migrations.add(CreateRaceResults())

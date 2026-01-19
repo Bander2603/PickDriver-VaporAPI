@@ -34,9 +34,9 @@ final class RaceResultsTests: XCTestCase {
         let round: Int
         let pick_position: Int
         let driver_name: String
-        let points: Int
-        let expected_points: Int?
-        let deviation: Int?
+        let points: Double
+        let expected_points: Double?
+        let deviation: Double?
     }
 
     // MARK: - Helpers (API)
@@ -327,12 +327,12 @@ final class RaceResultsTests: XCTestCase {
             )
             try await markRaceCompleted(app: app, raceID: try race.requireID())
 
-            let expectedPointsByPick = [1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1]
+            let expectedPointsByPick = [1: 25.0, 2: 18.0, 3: 15.0, 4: 12.0, 5: 10.0, 6: 8.0, 7: 6.0, 8: 4.0, 9: 2.0, 10: 1.0]
 
             let historyU1 = try await fetchPickHistory(app: app, token: u1.token, leagueID: leagueID, userID: u1ID)
             XCTAssertEqual(historyU1.count, 1)
             XCTAssertEqual(historyU1.first?.driver_name, "Max Fast")
-            XCTAssertEqual(historyU1.first?.points, 25)
+            XCTAssertEqual(historyU1.first?.points, 25.0)
             if let pickPosition = historyU1.first?.pick_position {
                 XCTAssertEqual(historyU1.first?.expected_points, expectedPointsByPick[pickPosition])
             }
@@ -340,7 +340,7 @@ final class RaceResultsTests: XCTestCase {
             let historyU2 = try await fetchPickHistory(app: app, token: u2.token, leagueID: leagueID, userID: u2ID)
             XCTAssertEqual(historyU2.count, 1)
             XCTAssertEqual(historyU2.first?.driver_name, "Low Score")
-            XCTAssertEqual(historyU2.first?.points, 0)
+            XCTAssertEqual(historyU2.first?.points, 0.0)
             if let pickPosition = historyU2.first?.pick_position {
                 XCTAssertEqual(historyU2.first?.expected_points, expectedPointsByPick[pickPosition])
             }

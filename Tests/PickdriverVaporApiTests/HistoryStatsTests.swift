@@ -34,9 +34,9 @@ final class HistoryStatsTests: XCTestCase {
         let round: Int
         let pick_position: Int
         let driver_name: String
-        let points: Int
-        let expected_points: Int?
-        let deviation: Int?
+        let points: Double
+        let expected_points: Double?
+        let deviation: Double?
     }
 
     // MARK: - Helpers (API)
@@ -358,7 +358,7 @@ final class HistoryStatsTests: XCTestCase {
             XCTAssertEqual(history.count, 2)
             XCTAssertEqual(history.map { $0.round }, [1, 2])
 
-            let expectedPointsByPick = [1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1]
+            let expectedPointsByPick = [1: 25.0, 2: 18.0, 3: 15.0, 4: 12.0, 5: 10.0, 6: 8.0, 7: 6.0, 8: 4.0, 9: 2.0, 10: 1.0]
             for entry in history {
                 let expected = try XCTUnwrap(entry.expected_points, "Expected points missing")
                 XCTAssertEqual(expected, expectedPointsByPick[entry.pick_position])
@@ -371,9 +371,9 @@ final class HistoryStatsTests: XCTestCase {
                 try driver3.requireID(): "Gamma Three"
             ]
             let pointsByDriverID = [
-                try driver1.requireID(): 25,
-                try driver2.requireID(): 18,
-                try driver3.requireID(): 10
+                try driver1.requireID(): 25.0,
+                try driver2.requireID(): 18.0,
+                try driver3.requireID(): 10.0
             ]
 
             let race1DriverForMissed = try XCTUnwrap(driverByUserRace1[missedUserID])
@@ -382,7 +382,7 @@ final class HistoryStatsTests: XCTestCase {
             XCTAssertEqual(history[0].pick_position, pickOrderRace1.firstIndex(of: missedUserID)! + 1)
 
             XCTAssertEqual(history[1].driver_name, "Missed Pick")
-            XCTAssertEqual(history[1].points, 0)
+            XCTAssertEqual(history[1].points, 0.0)
             XCTAssertEqual(history[1].pick_position, pickOrderRace2.firstIndex(of: missedUserID)! + 1)
         }
     }

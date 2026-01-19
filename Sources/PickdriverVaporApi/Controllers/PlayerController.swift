@@ -12,16 +12,16 @@ import SQLKit
 struct PlayerStanding: Content {
     let user_id: Int
     let username: String
-    let total_points: Int
+    let total_points: Double
     let team_id: Int?
-    let total_deviation: Int
+    let total_deviation: Double
 }
 
 struct PlayerTeamStanding: Content {
     let team_id: Int
     let name: String
-    let total_points: Int
-    let total_deviation: Int
+    let total_points: Double
+    let total_deviation: Double
 }
 
 struct PickHistory: Content {
@@ -29,9 +29,9 @@ struct PickHistory: Content {
     let round: Int
     let pick_position: Int
     let driver_name: String
-    let points: Int
-    let expected_points: Int?
-    let deviation: Int?
+    let points: Double
+    let expected_points: Double?
+    let deviation: Double?
 }
 
 struct PlayerController: RouteCollection {
@@ -56,7 +56,10 @@ struct PlayerController: RouteCollection {
             WITH picks AS (
                 SELECT
                     pp.user_id,
-                    rr.points,
+                    CASE
+                        WHEN pp.is_autopick THEN rr.points::double precision * 0.5
+                        ELSE rr.points::double precision
+                    END AS points,
                     rd.pick_order,
                     pp.draft_id,
                     pp.is_mirror_pick
@@ -89,8 +92,8 @@ struct PlayerController: RouteCollection {
             ),
             expected AS (
                 SELECT * FROM (VALUES
-                    (1, 25), (2, 18), (3, 15), (4, 12), (5, 10),
-                    (6, 8), (7, 6), (8, 4), (9, 2), (10, 1)
+                    (1, 25.0), (2, 18.0), (3, 15.0), (4, 12.0), (5, 10.0),
+                    (6, 8.0), (7, 6.0), (8, 4.0), (9, 2.0), (10, 1.0)
                 ) AS t(pick_position, expected_points)
             ),
             league_team_members AS (
@@ -102,8 +105,8 @@ struct PlayerController: RouteCollection {
             SELECT
                 u.id AS user_id,
                 u.username,
-                COALESCE(SUM(pp.points), 0) AS total_points,
-                COALESCE(SUM(pp.points - COALESCE(e.expected_points, 0)), 0) AS total_deviation,
+                COALESCE(SUM(pp.points), 0.0) AS total_points,
+                COALESCE(SUM(pp.points - COALESCE(e.expected_points, 0.0)), 0.0) AS total_deviation,
                 ltm.team_id
             FROM pick_positions pp
             JOIN users u ON pp.user_id = u.id
@@ -128,7 +131,10 @@ struct PlayerController: RouteCollection {
             WITH picks AS (
                 SELECT
                     pp.user_id,
-                    rr.points,
+                    CASE
+                        WHEN pp.is_autopick THEN rr.points::double precision * 0.5
+                        ELSE rr.points::double precision
+                    END AS points,
                     rd.pick_order,
                     pp.draft_id,
                     pp.is_mirror_pick
@@ -161,8 +167,8 @@ struct PlayerController: RouteCollection {
             ),
             expected AS (
                 SELECT * FROM (VALUES
-                    (1, 25), (2, 18), (3, 15), (4, 12), (5, 10),
-                    (6, 8), (7, 6), (8, 4), (9, 2), (10, 1)
+                    (1, 25.0), (2, 18.0), (3, 15.0), (4, 12.0), (5, 10.0),
+                    (6, 8.0), (7, 6.0), (8, 4.0), (9, 2.0), (10, 1.0)
                 ) AS t(pick_position, expected_points)
             ),
             league_team_members AS (
@@ -174,8 +180,8 @@ struct PlayerController: RouteCollection {
             SELECT
                 t.id AS team_id,
                 t.name,
-                COALESCE(SUM(pp.points), 0) AS total_points,
-                COALESCE(SUM(pp.points - COALESCE(e.expected_points, 0)), 0) AS total_deviation
+                COALESCE(SUM(pp.points), 0.0) AS total_points,
+                COALESCE(SUM(pp.points - COALESCE(e.expected_points, 0.0)), 0.0) AS total_deviation
             FROM pick_positions pp
             JOIN league_team_members ltm ON pp.user_id = ltm.user_id
             JOIN league_teams t ON ltm.team_id = t.id
@@ -237,8 +243,8 @@ struct PlayerController: RouteCollection {
             ),
             expected_points AS (
                 SELECT * FROM (VALUES
-                    (1, 25), (2, 18), (3, 15), (4, 12), (5, 10),
-                    (6, 8), (7, 6), (8, 4), (9, 2), (10, 1)
+                    (1, 25.0), (2, 18.0), (3, 15.0), (4, 12.0), (5, 10.0),
+                    (6, 8.0), (7, 6.0), (8, 4.0), (9, 2.0), (10, 1.0)
                 ) AS t(pick_position, expected_points)
             ),
             picks_with_points AS (
@@ -247,7 +253,10 @@ struct PlayerController: RouteCollection {
                     upp.round,
                     upp.pick_position,
                     d.first_name || ' ' || d.last_name AS driver_name,
-                    rr.points
+                    CASE
+                        WHEN pp.is_autopick THEN rr.points::double precision * 0.5
+                        ELSE rr.points::double precision
+                    END AS points
                 FROM user_pick_positions upp
                 LEFT JOIN LATERAL (
                     SELECT *
@@ -267,9 +276,9 @@ struct PlayerController: RouteCollection {
                 pwp.round,
                 pwp.pick_position,
                 COALESCE(pwp.driver_name, 'Missed Pick') AS driver_name,
-                COALESCE(pwp.points, 0) AS points,
+                COALESCE(pwp.points, 0.0) AS points,
                 ep.expected_points,
-                COALESCE(pwp.points, 0) - ep.expected_points AS deviation
+                COALESCE(pwp.points, 0.0) - ep.expected_points AS deviation
             FROM picks_with_points pwp
             LEFT JOIN expected_points ep ON pwp.pick_position = ep.pick_position
             ORDER BY pwp.round, pwp.pick_position;

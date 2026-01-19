@@ -41,19 +41,23 @@ final class StandingsTests: XCTestCase {
         let driverID: Int
     }
 
+    private struct AutopickListPayload: Content {
+        let driverIDs: [Int]
+    }
+
     private struct PlayerStandingDTO: Content {
         let user_id: Int
         let username: String
-        let total_points: Int
+        let total_points: Double
         let team_id: Int?
-        let total_deviation: Int
+        let total_deviation: Double
     }
 
     private struct TeamStandingDTO: Content {
         let team_id: Int
         let name: String
-        let total_points: Int
-        let total_deviation: Int
+        let total_points: Double
+        let total_deviation: Double
     }
 
     // MARK: - Helpers (API)
@@ -146,6 +150,20 @@ final class StandingsTests: XCTestCase {
         try await app.test(.POST, "/api/leagues/\(leagueID)/draft/\(raceID)/pick", beforeRequest: { req async throws in
             req.headers.bearerAuthorization = .init(token: token)
             try req.content.encode(PickPayload(driverID: driverID))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+        })
+    }
+
+    private func setAutopickList(
+        app: Application,
+        token: String,
+        leagueID: Int,
+        driverIDs: [Int]
+    ) async throws {
+        try await app.test(.PUT, "/api/leagues/\(leagueID)/autopick", beforeRequest: { req async throws in
+            req.headers.bearerAuthorization = .init(token: token)
+            try req.content.encode(AutopickListPayload(driverIDs: driverIDs))
         }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
         })
@@ -360,8 +378,8 @@ final class StandingsTests: XCTestCase {
             XCTAssertEqual(standingsAfterRace1.count, 2)
 
             let byUserAfterRace1 = Dictionary(uniqueKeysWithValues: standingsAfterRace1.map { ($0.user_id, $0) })
-            XCTAssertEqual(byUserAfterRace1[u1ID]?.total_points, 25)
-            XCTAssertEqual(byUserAfterRace1[u2ID]?.total_points, 18)
+            XCTAssertEqual(byUserAfterRace1[u1ID]?.total_points, 25.0)
+            XCTAssertEqual(byUserAfterRace1[u2ID]?.total_points, 18.0)
             XCTAssertNil(byUserAfterRace1[u1ID]?.team_id)
             XCTAssertEqual(standingsAfterRace1.first?.user_id, u1ID)
 
@@ -380,8 +398,8 @@ final class StandingsTests: XCTestCase {
             XCTAssertEqual(standingsAfterRace2.count, 2)
 
             let byUserAfterRace2 = Dictionary(uniqueKeysWithValues: standingsAfterRace2.map { ($0.user_id, $0) })
-            XCTAssertEqual(byUserAfterRace2[u1ID]?.total_points, 25)
-            XCTAssertEqual(byUserAfterRace2[u2ID]?.total_points, 43)
+            XCTAssertEqual(byUserAfterRace2[u1ID]?.total_points, 25.0)
+            XCTAssertEqual(byUserAfterRace2[u2ID]?.total_points, 43.0)
             XCTAssertEqual(standingsAfterRace2.first?.user_id, u2ID)
         }
     }
@@ -502,9 +520,111 @@ final class StandingsTests: XCTestCase {
             XCTAssertEqual(standings.count, 2)
 
             let byName = Dictionary(uniqueKeysWithValues: standings.map { ($0.name, $0) })
-            XCTAssertEqual(byName["Team A"]?.total_points, 40)
-            XCTAssertEqual(byName["Team B"]?.total_points, 18)
+            XCTAssertEqual(byName["Team A"]?.total_points, 40.0)
+            XCTAssertEqual(byName["Team B"]?.total_points, 18.0)
             XCTAssertEqual(standings.first?.name, "Team A")
+        }
+    }
+
+    func testAutopickPenaltyHalvesPoints() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+            let f1Team = try await TestSeed.createF1Team(app: app, seasonID: try season.requireID(), name: "Auto Team", color: "#111111")
+
+            let driverA = try await TestSeed.createDriver(
+                app: app,
+                seasonID: try season.requireID(),
+                f1TeamID: f1Team.id,
+                firstName: "Auto",
+                lastName: "First",
+                driverNumber: 11,
+                driverCode: "AU1"
+            )
+            let driverB = try await TestSeed.createDriver(
+                app: app,
+                seasonID: try season.requireID(),
+                f1TeamID: f1Team.id,
+                firstName: "Auto",
+                lastName: "Second",
+                driverNumber: 22,
+                driverCode: "AU2"
+            )
+
+            let now = Date()
+            let fp1Time = now.addingTimeInterval(2 * 3600)
+            let race = try await TestSeed.createRace(
+                app: app,
+                seasonID: try season.requireID(),
+                round: 1,
+                name: "Autopick GP",
+                completed: false,
+                fp1Time: fp1Time,
+                raceTime: now.addingTimeInterval(5 * 3600)
+            )
+
+            let u1 = try await TestAuth.register(app: app)
+            let u2 = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(
+                app: app,
+                token: u1.token,
+                name: "Autopick League",
+                maxPlayers: 2,
+                teamsEnabled: false
+            )
+
+            let leagueID = try XCTUnwrap(league.id)
+            let u1ID = try XCTUnwrap(u1.publicUser.id)
+            let u2ID = try XCTUnwrap(u2.publicUser.id)
+
+            try await joinLeague(app: app, token: u2.token, code: league.code)
+            try await startDraft(app: app, token: u1.token, leagueID: leagueID)
+
+            let pickOrder = try await getPickOrder(
+                app: app,
+                token: u1.token,
+                leagueID: leagueID,
+                raceID: try race.requireID()
+            )
+
+            let tokenByUserID = [u1ID: u1.token, u2ID: u2.token]
+            let firstUserID = pickOrder[0]
+            let secondUserID = pickOrder[1]
+
+            let firstToken = try XCTUnwrap(tokenByUserID[firstUserID])
+            let secondToken = try XCTUnwrap(tokenByUserID[secondUserID])
+
+            try await setAutopickList(
+                app: app,
+                token: firstToken,
+                leagueID: leagueID,
+                driverIDs: [try driverA.requireID(), try driverB.requireID()]
+            )
+
+            try await makePick(
+                app: app,
+                token: secondToken,
+                leagueID: leagueID,
+                raceID: try race.requireID(),
+                driverID: try driverB.requireID()
+            )
+
+            try await insertRaceResults(
+                app: app,
+                raceID: try race.requireID(),
+                f1TeamID: f1Team.id,
+                results: [
+                    (driverID: try driverA.requireID(), points: 25),
+                    (driverID: try driverB.requireID(), points: 18)
+                ]
+            )
+            try await markRaceCompleted(app: app, raceID: try race.requireID())
+
+            let standings = try await fetchPlayerStandings(app: app, token: u1.token, leagueID: leagueID)
+            let byUser = Dictionary(uniqueKeysWithValues: standings.map { ($0.user_id, $0) })
+
+            XCTAssertEqual(byUser[firstUserID]?.total_points, 12.5)
+            XCTAssertEqual(byUser[secondUserID]?.total_points, 18.0)
         }
     }
 }

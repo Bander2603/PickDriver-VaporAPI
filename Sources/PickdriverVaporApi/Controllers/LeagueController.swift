@@ -23,7 +23,17 @@ struct LeagueController: RouteCollection {
         protected.get(":leagueID", "draft", ":raceID", "pick-order", use: getPickOrderForRace)
         protected.get(":leagueID", "draft", ":raceID", use: getRaceDraft)
         protected.get(":leagueID", "draft", ":raceID", "deadlines", use: getDraftDeadlines)
+        protected.get(":leagueID", "autopick", use: getAutopickList)
+        protected.put(":leagueID", "autopick", use: upsertAutopickList)
 
+    }
+
+    struct AutopickListRequest: Content {
+        let driverIDs: [Int]
+    }
+
+    struct AutopickListResponse: Content {
+        let driverIDs: [Int]
     }
 
     func getMyLeagues(_ req: Request) async throws -> [League.Public] {
@@ -345,6 +355,75 @@ struct LeagueController: RouteCollection {
             firstHalfDeadline: firstHalfDeadline,
             secondHalfDeadline: secondHalfDeadline
         )
+    }
+
+    func getAutopickList(_ req: Request) async throws -> AutopickListResponse {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+
+        let existing = try await PlayerAutopick.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$user.$id == userID)
+            .first()
+
+        return AutopickListResponse(driverIDs: existing?.driverOrder ?? [])
+    }
+
+    func upsertAutopickList(_ req: Request) async throws -> AutopickListResponse {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        let data = try req.content.decode(AutopickListRequest.self)
+
+        var seen = Set<Int>()
+        let orderedUnique = data.driverIDs.filter { seen.insert($0).inserted }
+
+        if !orderedUnique.isEmpty {
+            let validIDs = try await Driver.query(on: req.db)
+                .filter(\.$seasonID == league.seasonID)
+                .filter(\.$id ~~ orderedUnique)
+                .all()
+                .map { $0.id }
+
+            let validIDSet = Set(validIDs.compactMap { $0 })
+            guard validIDSet.count == orderedUnique.count else {
+                throw Abort(.badRequest, reason: "One or more driver IDs are invalid for this league season.")
+            }
+        }
+
+        if orderedUnique.isEmpty {
+            if let existing = try await PlayerAutopick.query(on: req.db)
+                .filter(\.$league.$id == leagueID)
+                .filter(\.$user.$id == userID)
+                .first() {
+                try await existing.delete(on: req.db)
+            }
+            return AutopickListResponse(driverIDs: [])
+        }
+
+        if let existing = try await PlayerAutopick.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$user.$id == userID)
+            .first() {
+            existing.driverOrder = orderedUnique
+            try await existing.save(on: req.db)
+        } else {
+            let autopick = PlayerAutopick(leagueID: leagueID, userID: userID, driverOrder: orderedUnique)
+            try await autopick.save(on: req.db)
+        }
+
+        return AutopickListResponse(driverIDs: orderedUnique)
     }
 
     func getRaceDraft(_ req: Request) async throws -> RaceDraft {

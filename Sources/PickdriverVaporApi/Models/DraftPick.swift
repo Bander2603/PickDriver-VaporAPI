@@ -32,6 +32,9 @@ final class DraftPick: Model, Content, @unchecked Sendable {
     @Field(key: "is_banned")
     var isBanned: Bool
 
+    @Field(key: "is_autopick")
+    var isAutopick: Bool
+
     @OptionalParent(key: "banned_by")
     var bannedBy: User?
 
@@ -40,11 +43,12 @@ final class DraftPick: Model, Content, @unchecked Sendable {
 
     init() {}
 
-    init(draftID: Int, userID: Int, driverID: Int, isMirrorPick: Bool = false) {
+    init(draftID: Int, userID: Int, driverID: Int, isMirrorPick: Bool = false, isAutopick: Bool = false) {
         self.$draft.id = draftID
         self.$user.id = userID
         self.$driver.id = driverID
         self.isMirrorPick = isMirrorPick
         self.isBanned = false
+        self.isAutopick = isAutopick
     }
 }

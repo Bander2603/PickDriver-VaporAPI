@@ -438,6 +438,53 @@ struct CreatePlayerBans: AsyncMigration {
     }
 }
 
+// MARK: - player_picks autopick flag
+
+struct AddAutoPickToPlayerPicks: AsyncMigration {
+    func prepare(on database: any Database) async throws {
+        let sql = try database.sql()
+        try await sql.exec(#"""
+        ALTER TABLE public.player_picks
+        ADD COLUMN IF NOT EXISTS is_autopick boolean DEFAULT false NOT NULL
+        """#)
+    }
+
+    func revert(on database: any Database) async throws {
+        let sql = try database.sql()
+        try await sql.exec(#"""
+        ALTER TABLE public.player_picks
+        DROP COLUMN IF EXISTS is_autopick
+        """#)
+    }
+}
+
+// MARK: - player_autopicks
+
+struct CreatePlayerAutopicks: AsyncMigration {
+    func prepare(on database: any Database) async throws {
+        let sql = try database.sql()
+
+        try await sql.exec(#"""
+        CREATE TABLE public.player_autopicks (
+            id SERIAL PRIMARY KEY,
+            league_id integer NOT NULL,
+            user_id integer NOT NULL,
+            driver_order integer[] DEFAULT '{}'::integer[] NOT NULL,
+            created_at timestamp without time zone DEFAULT now() NOT NULL,
+            updated_at timestamp without time zone DEFAULT now() NOT NULL,
+            CONSTRAINT player_autopicks_league_id_fkey FOREIGN KEY (league_id) REFERENCES public.leagues(id) ON DELETE CASCADE,
+            CONSTRAINT player_autopicks_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
+            CONSTRAINT player_autopicks_league_user_key UNIQUE (league_id, user_id)
+        )
+        """#)
+    }
+
+    func revert(on database: any Database) async throws {
+        let sql = try database.sql()
+        try await sql.exec("DROP TABLE IF EXISTS public.player_autopicks")
+    }
+}
+
 // MARK: - race_results
 
 struct CreateRaceResults: AsyncMigration {
