@@ -175,10 +175,39 @@ struct DraftController: RouteCollection {
             throw Abort(.conflict, reason: "Driver already picked")
         }
         
-        try await sql.raw("""
-            INSERT INTO player_picks (draft_id, user_id, driver_id, is_banned, is_mirror_pick, picked_at)
-            VALUES (\(bind: draftID), \(bind: currentTurnUserID), \(bind: data.driverID), false, \(bind: isMirrorPick), NOW())
-        """).run()
+        do {
+            try await sql.raw("""
+                INSERT INTO player_picks (draft_id, user_id, driver_id, is_banned, is_mirror_pick, picked_at)
+                VALUES (\(bind: draftID), \(bind: currentTurnUserID), \(bind: data.driverID), false, \(bind: isMirrorPick), NOW())
+            """).run()
+        } catch {
+            let driverTaken = try await sql.raw("""
+                SELECT 1 FROM player_picks
+                WHERE draft_id = \(bind: draftID)
+                  AND driver_id = \(bind: data.driverID)
+                  AND is_banned = false
+                LIMIT 1
+            """).first()
+
+            if driverTaken != nil {
+                throw Abort(.conflict, reason: "Driver already picked")
+            }
+
+            let pickExists = try await sql.raw("""
+                SELECT 1 FROM player_picks
+                WHERE draft_id = \(bind: draftID)
+                  AND user_id = \(bind: currentTurnUserID)
+                  AND is_banned = false
+                  AND is_mirror_pick = \(bind: isMirrorPick)
+                LIMIT 1
+            """).first()
+
+            if pickExists != nil {
+                throw Abort(.conflict, reason: "Pick already submitted")
+            }
+
+            throw error
+        }
         
         draft.currentPickIndex += 1
         try await draft.save(on: req.db)

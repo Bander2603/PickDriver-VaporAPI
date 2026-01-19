@@ -61,6 +61,7 @@ public func configure(_ app: Application) async throws {
     // Draft domain
     app.migrations.add(CreateRaceDrafts())
     app.migrations.add(CreatePlayerPicks())
+    app.migrations.add(AddUniqueDriverPickPerDraft())
     app.migrations.add(CreatePlayerBans())
 
     // Results + maintenance

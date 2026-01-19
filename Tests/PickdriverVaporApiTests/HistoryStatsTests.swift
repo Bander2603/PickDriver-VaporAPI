@@ -153,6 +153,41 @@ final class HistoryStatsTests: XCTestCase {
         }
     }
 
+    func testPickHistoryRequiresLeagueMembership_andTargetMember() async throws {
+        try await withTestApp { app in
+            _ = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+
+            let creator = try await TestAuth.register(app: app)
+            let outsider = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(
+                app: app,
+                token: creator.token,
+                name: "League History Access",
+                maxPlayers: 2,
+                teamsEnabled: false
+            )
+
+            let leagueID = try XCTUnwrap(league.id)
+            let creatorID = try XCTUnwrap(creator.publicUser.id)
+            let outsiderID = try XCTUnwrap(outsider.publicUser.id)
+
+            // Non-member cannot access pick history.
+            try await app.test(.GET, "/api/players/standings/picks?league_id=\(leagueID)&user_id=\(creatorID)", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: outsider.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .forbidden)
+            })
+
+            // Member cannot request history for a user outside the league.
+            try await app.test(.GET, "/api/players/standings/picks?league_id=\(leagueID)&user_id=\(outsiderID)", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: creator.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .forbidden)
+            })
+        }
+    }
+
     // MARK: - Helpers (DB)
 
     private func sql(_ app: Application) throws -> any SQLDatabase {

@@ -6,6 +6,7 @@
 //
 
 import Vapor
+import Fluent
 import SQLKit
 
 struct PlayerStanding: Content {
@@ -44,9 +45,12 @@ struct PlayerController: RouteCollection {
     func getPlayerStandings(_ req: Request) async throws -> [PlayerStanding] {
         let sql = req.db as! (any SQLDatabase)
 
+        let _ = try req.auth.require(User.self)
         guard let leagueID = req.query[Int.self, at: "league_id"] else {
             throw Abort(.badRequest, reason: "Missing league_id parameter")
         }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
 
         return try await sql.raw("""
             WITH picks AS (
@@ -88,18 +92,24 @@ struct PlayerController: RouteCollection {
                     (1, 25), (2, 18), (3, 15), (4, 12), (5, 10),
                     (6, 8), (7, 6), (8, 4), (9, 2), (10, 1)
                 ) AS t(pick_position, expected_points)
+            ),
+            league_team_members AS (
+                SELECT tm.user_id, tm.team_id
+                FROM team_members tm
+                JOIN league_teams lt ON tm.team_id = lt.id
+                WHERE lt.league_id = \(bind: leagueID)
             )
             SELECT
                 u.id AS user_id,
                 u.username,
                 COALESCE(SUM(pp.points), 0) AS total_points,
                 COALESCE(SUM(pp.points - COALESCE(e.expected_points, 0)), 0) AS total_deviation,
-                tm.team_id
+                ltm.team_id
             FROM pick_positions pp
             JOIN users u ON pp.user_id = u.id
             LEFT JOIN expected e ON e.pick_position = pp.pick_position
-            LEFT JOIN team_members tm ON u.id = tm.user_id
-            GROUP BY u.id, u.username, tm.team_id
+            LEFT JOIN league_team_members ltm ON u.id = ltm.user_id
+            GROUP BY u.id, u.username, ltm.team_id
             ORDER BY total_points DESC;
         """).all(decoding: PlayerStanding.self)
     }
@@ -107,9 +117,12 @@ struct PlayerController: RouteCollection {
     func getTeamStandings(_ req: Request) async throws -> [PlayerTeamStanding] {
         let sql = req.db as! (any SQLDatabase)
 
+        let _ = try req.auth.require(User.self)
         guard let leagueID = req.query[Int.self, at: "league_id"] else {
             throw Abort(.badRequest, reason: "Missing league_id parameter")
         }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
 
         return try await sql.raw("""
             WITH picks AS (
@@ -151,6 +164,12 @@ struct PlayerController: RouteCollection {
                     (1, 25), (2, 18), (3, 15), (4, 12), (5, 10),
                     (6, 8), (7, 6), (8, 4), (9, 2), (10, 1)
                 ) AS t(pick_position, expected_points)
+            ),
+            league_team_members AS (
+                SELECT tm.user_id, tm.team_id
+                FROM team_members tm
+                JOIN league_teams lt ON tm.team_id = lt.id
+                WHERE lt.league_id = \(bind: leagueID)
             )
             SELECT
                 t.id AS team_id,
@@ -158,8 +177,8 @@ struct PlayerController: RouteCollection {
                 COALESCE(SUM(pp.points), 0) AS total_points,
                 COALESCE(SUM(pp.points - COALESCE(e.expected_points, 0)), 0) AS total_deviation
             FROM pick_positions pp
-            JOIN team_members tm ON pp.user_id = tm.user_id
-            JOIN league_teams t ON tm.team_id = t.id
+            JOIN league_team_members ltm ON pp.user_id = ltm.user_id
+            JOIN league_teams t ON ltm.team_id = t.id
             LEFT JOIN expected e ON e.pick_position = pp.pick_position
             GROUP BY t.id, t.name
             ORDER BY total_points DESC;
@@ -169,9 +188,21 @@ struct PlayerController: RouteCollection {
     func getPickHistory(_ req: Request) async throws -> [PickHistory] {
         let sql = req.db as! (any SQLDatabase)
 
+        let _ = try req.auth.require(User.self)
         guard let leagueID = req.query[Int.self, at: "league_id"],
               let userID = req.query[Int.self, at: "user_id"] else {
             throw Abort(.badRequest, reason: "Missing league_id or user_id parameter")
+        }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+
+        let targetMembership = try await LeagueMember.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$user.$id == userID)
+            .first()
+
+        guard targetMembership != nil else {
+            throw Abort(.forbidden, reason: "User is not a member of this league")
         }
 
         return try await sql.raw("""

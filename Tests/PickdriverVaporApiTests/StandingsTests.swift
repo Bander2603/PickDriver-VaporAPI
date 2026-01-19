@@ -192,6 +192,37 @@ final class StandingsTests: XCTestCase {
         }
     }
 
+    func testStandingsRequireLeagueMembership() async throws {
+        try await withTestApp { app in
+            _ = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+
+            let creator = try await TestAuth.register(app: app)
+            let outsider = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(
+                app: app,
+                token: creator.token,
+                name: "League Standings Access",
+                maxPlayers: 2,
+                teamsEnabled: false
+            )
+
+            let leagueID = try XCTUnwrap(league.id)
+
+            try await app.test(.GET, "/api/players/standings/players?league_id=\(leagueID)", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: outsider.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .forbidden)
+            })
+
+            try await app.test(.GET, "/api/players/standings/teams?league_id=\(leagueID)", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: outsider.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .forbidden)
+            })
+        }
+    }
+
     // MARK: - Helpers (DB)
 
     private func sql(_ app: Application) throws -> any SQLDatabase {

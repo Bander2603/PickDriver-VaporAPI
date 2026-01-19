@@ -381,6 +381,25 @@ struct CreatePlayerPicks: AsyncMigration {
     }
 }
 
+// MARK: - unique driver picks per draft
+
+struct AddUniqueDriverPickPerDraft: AsyncMigration {
+    func prepare(on database: any Database) async throws {
+        let sql = try database.sql()
+
+        try await sql.exec(#"""
+        CREATE UNIQUE INDEX IF NOT EXISTS unique_driver_pick_per_draft
+        ON public.player_picks USING btree (draft_id, driver_id)
+        WHERE (is_banned = false)
+        """#)
+    }
+
+    func revert(on database: any Database) async throws {
+        let sql = try database.sql()
+        try await sql.exec("DROP INDEX IF EXISTS public.unique_driver_pick_per_draft")
+    }
+}
+
 // MARK: - player_bans
 
 struct CreatePlayerBans: AsyncMigration {
