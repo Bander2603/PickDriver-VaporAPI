@@ -37,6 +37,10 @@ struct UserAuthenticator: AsyncMiddleware {
             throw Abort(.unauthorized, reason: "User not found")
         }
 
+        guard user.emailVerified else {
+            throw Abort(.forbidden, reason: "Email not verified.")
+        }
+
         request.auth.login(user)
         print("🔓 [AUTH] Logged in user ID: \(userId)")
 

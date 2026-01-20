@@ -11,6 +11,8 @@ public func configure(_ app: Application) async throws {
     app.http.server.configuration.port = 3000
     app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET")!))
     app.jwtExpiration = Double(Environment.get("JWT_EXPIRES_IN_SECONDS") ?? "604800")!
+    app.emailVerificationExpiration = Double(Environment.get("EMAIL_VERIFICATION_EXPIRES_IN_SECONDS") ?? "86400")!
+    app.emailVerificationResendInterval = Double(Environment.get("EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS") ?? "60")!
 
     // uncomment to serve files from /Public folder
     // app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
@@ -46,6 +48,8 @@ public func configure(_ app: Application) async throws {
     // Base tables
     app.migrations.add(CreateSeasons())
     app.migrations.add(CreateUsers())
+    app.migrations.add(AddEmailVerificationToUsers())
+    app.migrations.add(RemoveFirebaseUIDFromUsers())
 
     // F1 domain
     app.migrations.add(CreateF1Teams())
@@ -87,5 +91,23 @@ extension Application {
     var jwtExpiration: Double {
         get { self.storage[JWTExpirationKey.self] ?? 604800 } // 7 days
         set { self.storage[JWTExpirationKey.self] = newValue }
+    }
+
+    private struct EmailVerificationExpirationKey: StorageKey {
+        typealias Value = Double
+    }
+
+    var emailVerificationExpiration: Double {
+        get { self.storage[EmailVerificationExpirationKey.self] ?? 86400 } // 24 hours
+        set { self.storage[EmailVerificationExpirationKey.self] = newValue }
+    }
+
+    private struct EmailVerificationResendIntervalKey: StorageKey {
+        typealias Value = Double
+    }
+
+    var emailVerificationResendInterval: Double {
+        get { self.storage[EmailVerificationResendIntervalKey.self] ?? 60 } // 1 minute
+        set { self.storage[EmailVerificationResendIntervalKey.self] = newValue }
     }
 }

@@ -45,13 +45,15 @@ enum TestAuth {
         app: Application,
         username: String? = nil,
         email: String? = nil,
-        password: String = "123456"
+        password: String = "12345678"
     ) async throws -> CreatedUser {
         let u = username ?? "user_\(UUID().uuidString.prefix(8))"
         let e = email ?? "\(UUID().uuidString.prefix(8))@test.com"
+        let normalizedEmail = e.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         var token: String = ""
         var publicUser: User.Public?
+        var verificationToken: String?
 
         try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
             try req.content.encode([
@@ -61,17 +63,31 @@ enum TestAuth {
             ])
         }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
-            let auth = try res.content.decode(AuthResponse.self)
-            XCTAssertEqual(auth.user.username, u)
-            XCTAssertEqual(auth.user.email, e)
-            XCTAssertFalse(auth.token.isEmpty)
-            token = auth.token
-            publicUser = auth.user
+            let register = try res.content.decode(RegisterResponse.self)
+            XCTAssertEqual(register.user.username, u)
+            XCTAssertEqual(register.user.email, normalizedEmail)
+            XCTAssertTrue(register.verificationRequired)
+            verificationToken = register.verificationToken
+            publicUser = register.user
         })
+
+        if let verificationToken {
+            try await app.test(.POST, "/api/auth/verify-email", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "token": verificationToken
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+            })
+        }
+
+        let auth = try await login(app: app, email: normalizedEmail, password: password)
+        token = auth.token
+        publicUser = auth.user
 
         return CreatedUser(
             username: u,
-            email: e,
+            email: normalizedEmail,
             password: password,
             token: token,
             publicUser: try XCTUnwrap(publicUser)
@@ -188,4 +204,3 @@ enum TestSeed {
         return d
     }
 }
-

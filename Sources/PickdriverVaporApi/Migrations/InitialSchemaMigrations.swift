@@ -70,13 +70,11 @@ struct CreateUsers: AsyncMigration {
         try await sql.exec(#"""
         CREATE TABLE public.users (
             id SERIAL PRIMARY KEY,
-            firebase_uid character varying(128),
             username character varying(50) NOT NULL,
             email character varying(100) NOT NULL,
             password_hash character varying(256),
             created_at timestamp without time zone DEFAULT now() NOT NULL,
-            CONSTRAINT users_email_key UNIQUE (email),
-            CONSTRAINT users_firebase_uid_key UNIQUE (firebase_uid)
+            CONSTRAINT users_email_key UNIQUE (email)
         )
         """#)
 
