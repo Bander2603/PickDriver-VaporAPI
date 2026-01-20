@@ -12,6 +12,7 @@ func routes(_ app: Application) throws {
     try api.register(collection: RaceController())
     try api.register(collection: DriverController())
     try api.register(collection: StandingsController())
+    try api.register(collection: NotificationController())
 
     // ✅ TeamController is already protected inside its own definition
     try api.register(collection: TeamController())

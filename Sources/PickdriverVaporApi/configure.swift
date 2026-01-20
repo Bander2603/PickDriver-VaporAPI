@@ -70,6 +70,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateRaceResults())
     app.migrations.add(CreateMaintenanceStats())
 
+    // Notifications
+    app.migrations.add(CreatePushTokens())
+    app.migrations.add(CreatePushNotifications())
+
     // register routes
     try routes(app)
 }

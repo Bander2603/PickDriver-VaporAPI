@@ -307,6 +307,16 @@ struct DraftController: RouteCollection {
         try await draft.save(on: req.db)
         
         let nextUserID = draft.currentPickIndex < pickOrder.count ? pickOrder[draft.currentPickIndex] : nil
+        if let nextUserID {
+            try await NotificationService.notifyDraftTurn(
+                on: req.db,
+                recipientID: nextUserID,
+                league: league,
+                race: race,
+                draftID: draftID,
+                pickIndex: draft.currentPickIndex
+            )
+        }
         let yourDeadline = pickOrder.first == userID ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
         
         return DraftResponse(
@@ -516,6 +526,17 @@ struct DraftController: RouteCollection {
         
         draft.currentPickIndex = targetIndex
         try await draft.save(on: req.db)
+
+        if let nextUserID = draft.pickOrder[safe: draft.currentPickIndex] {
+            try await NotificationService.notifyDraftTurn(
+                on: req.db,
+                recipientID: nextUserID,
+                league: league,
+                race: race,
+                draftID: draftID,
+                pickIndex: draft.currentPickIndex
+            )
+        }
         
         return DraftResponse(
             status: "ok",

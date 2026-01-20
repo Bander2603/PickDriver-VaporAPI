@@ -298,6 +298,17 @@ struct LeagueController: RouteCollection {
                 status: "pending"
             )
             try await draft.save(on: req.db)
+
+            if i == 0, let firstUserID = pickOrder.first {
+                try await NotificationService.notifyDraftTurn(
+                    on: req.db,
+                    recipientID: firstUserID,
+                    league: league,
+                    race: race,
+                    draftID: try draft.requireID(),
+                    pickIndex: 0
+                )
+            }
         }
 
         return .ok
