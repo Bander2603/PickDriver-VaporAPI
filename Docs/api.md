@@ -5,7 +5,7 @@
 - Prefijo: /api
 - Content-Type: application/json
 - Fechas: ISO 8601 (UTC)
-- JSON keys: snake_case (Vapor default)
+- JSON keys: camelCase por defecto (nombres Swift). Algunos DTOs y query params usan snake_case; ver endpoints/modelos.
 
 ## Autenticacion
 - JWT HS256
@@ -56,9 +56,9 @@ Ligas y equipos:
 
 Draft:
 - start-draft crea drafts para carreras futuras desde initial_race_round.
-- pick_order incluye mirror picks si mirror_picks_enabled = true.
-- Deadlines: first_half_deadline = fp1 - 36h; second_half_deadline = fp1.
-- No se permite pick/ban si la carrera ya comenzo (race_time en pasado).
+- pickOrder incluye mirror picks si mirror_picks_enabled = true.
+- Deadlines: firstHalfDeadline = fp1 - 36h; secondHalfDeadline = fp1.
+- No se permite pick/ban si la carrera ya comenzo (raceTime en pasado).
 - Pick: solo el usuario del turno; en ligas con equipos, en la ultima hora antes de fp1 un companero puede pickear por el turno actual.
 - Ban: solo si bans_enabled = true; solo se puede banear el pick inmediatamente anterior.
 - No se puede banear al ultimo jugador del orden (salvo que sea tambien el primero).
@@ -75,8 +75,8 @@ Notificaciones:
 ### Auth
 - POST /api/auth/register
   - Req: { "username": "user", "email": "a@b.com", "password": "..." }
-  - Res: { "user": UserPublic, "verification_required": true, "verification_token": "..."? }
-  - Nota: verification_token solo en no-produccion.
+  - Res: { "user": UserPublic, "verificationRequired": true, "verificationToken": "..."? }
+  - Nota: verificationToken solo en no-produccion.
 - POST /api/auth/login
   - Req: { "email": "a@b.com", "password": "..." }
   - Res: { "user": UserPublic, "token": "..." }
@@ -85,23 +85,26 @@ Notificaciones:
   - Res: { "verified": true }
 - POST /api/auth/resend-verification
   - Req: { "email": "a@b.com" }
-  - Res: { "message": "...", "verification_token": "..."? }
+  - Res: { "message": "...", "verificationToken": "..."? }
 - GET /api/auth/profile (auth)
   - Res: UserPublic
 - PUT /api/auth/password (auth)
-  - Req: { "current_password": "...", "new_password": "..." }
+  - Req: { "currentPassword": "...", "newPassword": "..." }
   - Res: 200 OK
 
 ### Races (publico)
 - GET /api/races
+  - Res: Race[]
 - GET /api/races/upcoming
+  - Res: Race[]
 - GET /api/races/current
-- GET /api/races/:race_id
+  - Res: Race
+- GET /api/races/:raceID
   - Res: Race
 
 ### Drivers (publico)
 - GET /api/drivers
-  - Res: Driver
+  - Res: Driver[]
 
 ### Standings F1 (publico)
 - GET /api/standings/f1/drivers
@@ -113,50 +116,50 @@ Notificaciones:
 - GET /api/leagues/my
   - Res: LeaguePublic[]
 - POST /api/leagues/create
-  - Req: { "name": "...", "max_players": 8, "teams_enabled": true, "bans_enabled": true, "mirror_picks_enabled": true }
+  - Req: { "name": "...", "maxPlayers": 8, "teamsEnabled": true, "bansEnabled": true, "mirrorEnabled": true }
   - Res: LeaguePublic
 - POST /api/leagues/join
   - Req: { "code": "ABC123" }
   - Res: LeaguePublic
-- GET /api/leagues/:league_id/members
+- GET /api/leagues/:leagueID/members
   - Res: UserPublic[]
-- GET /api/leagues/:league_id/teams
+- GET /api/leagues/:leagueID/teams
   - Res: LeagueTeam[] (incluye members)
-- POST /api/leagues/:league_id/assign-pick-order
+- POST /api/leagues/:leagueID/assign-pick-order
   - Res: 200 OK
-- POST /api/leagues/:league_id/start-draft
+- POST /api/leagues/:leagueID/start-draft
   - Res: 200 OK
-- GET /api/leagues/:league_id/draft/:race_id/pick-order
-  - Res: [Int] (user_id)
-- GET /api/leagues/:league_id/draft/:race_id
+- GET /api/leagues/:leagueID/draft/:raceID/pick-order
+  - Res: [Int] (user IDs)
+- GET /api/leagues/:leagueID/draft/:raceID
   - Res: RaceDraft
-- GET /api/leagues/:league_id/draft/:race_id/deadlines
+- GET /api/leagues/:leagueID/draft/:raceID/deadlines
   - Res: DraftDeadline
-- GET /api/leagues/:league_id/autopick
-  - Res: { "driver_ids": [Int] }
-- PUT /api/leagues/:league_id/autopick
-  - Req: { "driver_ids": [Int] }
-  - Res: { "driver_ids": [Int] }
+- GET /api/leagues/:leagueID/autopick
+  - Res: { "driverIDs": [Int] }
+- PUT /api/leagues/:leagueID/autopick
+  - Req: { "driverIDs": [Int] }
+  - Res: { "driverIDs": [Int] }
 
 ### Draft picks (auth)
-- POST /api/leagues/:league_id/draft/:race_id/pick
-  - Req: { "driver_id": Int }
+- POST /api/leagues/:leagueID/draft/:raceID/pick
+  - Req: { "driverID": Int }
   - Res: DraftResponse
-- POST /api/leagues/:league_id/draft/:race_id/ban
-  - Req: { "target_user_id": Int, "driver_id": Int }
+- POST /api/leagues/:leagueID/draft/:raceID/ban
+  - Req: { "targetUserID": Int, "driverID": Int }
   - Res: DraftResponse
 
 ### Teams (auth)
 - POST /api/teams
   - Req: { "league_id": Int, "name": "...", "user_ids": [Int] }
   - Res: LeagueTeam
-- PUT /api/teams/:team_id
+- PUT /api/teams/:teamID
   - Req: { "name": "...", "user_ids": [Int] }
   - Res: LeagueTeam
-- DELETE /api/teams/:team_id
+- DELETE /api/teams/:teamID
   - Res: 200 OK
-- POST /api/teams/:team_id/assign
-  - Req: { "user_id": Int }
+- POST /api/teams/:teamID/assign
+  - Req: { "userID": Int }
   - Res: 200 OK
 
 ### Player standings (auth)
@@ -171,52 +174,52 @@ Notificaciones:
 - GET /api/notifications?limit=50&unread_only=false
   - Res: PushNotificationPublic[]
 - POST /api/notifications/devices
-  - Req: { "token": "...", "platform": "...", "device_id": "..."? }
+  - Req: { "token": "...", "platform": "...", "deviceID": "..."? }
   - Res: 200 OK
 - DELETE /api/notifications/devices
   - Req: { "token": "..." }
   - Res: 200 OK
-- POST /api/notifications/:notification_id/read
+- POST /api/notifications/:notificationID/read
   - Res: PushNotificationPublic
 
 ### Results publish (auth)
-- POST /api/races/:race_id/results/publish
-  - Res: { "created_notifications": Int }
+- POST /api/races/:raceID/results/publish
+  - Res: { "createdNotifications": Int }
 
 ## Modelos (resumen)
 
 UserPublic:
-{ "id": Int, "username": String, "email": String, "email_verified": Bool }
+{ "id": Int, "username": String, "email": String, "emailVerified": Bool }
 
 LeaguePublic:
 { "id": Int, "name": String, "invite_code": String, "status": String, "initial_race_round": Int?, "owner_id": Int, "max_players": Int, "teams_enabled": Bool, "bans_enabled": Bool, "mirror_picks_enabled": Bool }
 
 Race:
 {
-  "id": Int, "season_id": Int, "round": Int, "name": String, "circuit_name": String,
-  "circuit_data": { "laps": Int?, "first_gp": Int?, "race_distance": Double?, "circuit_length": Double?, "lap_record_time": String?, "lap_record_driver": String? }?,
-  "country": String, "country_code": String, "sprint": Bool, "completed": Bool,
-  "fp1_time": Date?, "fp2_time": Date?, "fp3_time": Date?, "qualifying_time": Date?,
-  "sprint_time": Date?, "race_time": Date?, "sprint_qualifying_time": Date?
+  "id": Int, "seasonID": Int, "round": Int, "name": String, "circuitName": String,
+  "circuitData": { "laps": Int?, "first_gp": Int?, "race_distance": Double?, "circuit_length": Double?, "lap_record_time": String?, "lap_record_driver": String? }?,
+  "country": String, "countryCode": String, "sprint": Bool, "completed": Bool,
+  "fp1Time": Date?, "fp2Time": Date?, "fp3Time": Date?, "qualifyingTime": Date?,
+  "sprintTime": Date?, "raceTime": Date?, "sprintQualifyingTime": Date?
 }
 
 Driver:
-{ "id": Int, "season_id": Int, "f1_team_id": Int, "first_name": String, "last_name": String, "country": String, "driver_number": Int, "active": Bool, "driver_code": String }
+{ "id": Int, "seasonID": Int, "teamID": Int, "firstName": String, "lastName": String, "country": String, "driverNumber": Int, "active": Bool, "driverCode": String }
 
 RaceDraft:
-{ "id": Int, "league_id": Int, "race_id": Int, "pick_order": [Int], "current_pick_index": Int, "mirror_picks": Bool, "status": String }
+{ "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String }
 
 DraftDeadline:
-{ "race_id": Int, "league_id": Int, "first_half_deadline": Date, "second_half_deadline": Date }
+{ "raceID": Int, "leagueID": Int, "firstHalfDeadline": Date, "secondHalfDeadline": Date }
 
 DraftResponse:
-{ "status": String, "current_pick_index": Int, "next_user_id": Int?, "banned_driver_ids": [Int], "picked_driver_ids": [Int], "your_turn": Bool, "your_deadline": Date }
+{ "status": String, "currentPickIndex": Int, "nextUserID": Int?, "bannedDriverIDs": [Int], "pickedDriverIDs": [Int], "yourTurn": Bool, "yourDeadline": Date }
 
 LeagueTeam:
-{ "id": Int, "name": String, "league_id": Int, "members": [TeamMember] }
+{ "id": Int, "name": String, "league": { "id": Int }, "members": [TeamMember] }
 
 TeamMember:
-{ "id": Int, "user_id": Int, "team_id": Int }
+{ "id": Int, "user": { "id": Int }, "team": { "id": Int } }
 
 DriverStanding:
 { "driver_id": Int, "first_name": String, "last_name": String, "driver_code": String, "points": Int, "team_id": Int, "team_name": String, "team_color": String }
@@ -234,10 +237,10 @@ PickHistory:
 { "race_name": String, "round": Int, "pick_position": Int, "driver_name": String, "points": Double, "expected_points": Double?, "deviation": Double? }
 
 PushNotificationPublic:
-{ "id": Int, "type": String, "title": String, "body": String, "data": NotificationPayload?, "league_id": Int?, "race_id": Int?, "created_at": Date?, "read_at": Date?, "delivered_at": Date? }
+{ "id": Int, "type": String, "title": String, "body": String, "data": NotificationPayload?, "leagueID": Int?, "raceID": Int?, "createdAt": Date?, "readAt": Date?, "deliveredAt": Date? }
 
 NotificationPayload:
-{ "league_id": Int?, "race_id": Int?, "draft_id": Int?, "pick_index": Int? }
+{ "leagueID": Int?, "raceID": Int?, "draftID": Int?, "pickIndex": Int? }
 
 ## CORS, dominio y Cloudflare
 - Si el cliente vive en https://pickdriver.cc y la API en otro origen (ej. https://api.pickdriver.cc), el navegador requiere CORS.
