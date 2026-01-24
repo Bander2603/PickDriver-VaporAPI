@@ -121,6 +121,9 @@ Notificaciones:
 - POST /api/leagues/join
   - Req: { "code": "ABC123" }
   - Res: LeaguePublic
+- DELETE /api/leagues/:leagueID
+  - Res: 200 OK
+  - Nota: solo owner y solo si status = "pending".
 - GET /api/leagues/:leagueID/members
   - Res: UserPublic[]
 - GET /api/leagues/:leagueID/teams

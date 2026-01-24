@@ -15,6 +15,7 @@ struct LeagueController: RouteCollection {
         protected.get("my", use: getMyLeagues)
         protected.post("create", use: createLeague)
         protected.post("join", use: joinLeague)
+        protected.delete(":leagueID", use: deleteLeague)
         
         protected.get(":leagueID", "members", use: getLeagueMembers)
         protected.get(":leagueID", "teams", use: getLeagueTeams)
@@ -83,6 +84,26 @@ struct LeagueController: RouteCollection {
         try await member.save(on: req.db)
 
         return league.convertToPublic()
+    }
+
+    func deleteLeague(_ req: Request) async throws -> HTTPStatus {
+        let _ = try req.auth.require(User.self)
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        guard let league = try await League.find(leagueID, on: req.db) else {
+            throw Abort(.notFound, reason: "League not found.")
+        }
+
+        try LeagueAccess.requireOwner(req, league: league)
+
+        guard league.status.lowercased() == "pending" else {
+            throw Abort(.badRequest, reason: "Only pending leagues can be deleted.")
+        }
+
+        try await league.delete(on: req.db)
+        return .ok
     }
 
     func getLeagueMembers(_ req: Request) async throws -> [User.Public] {

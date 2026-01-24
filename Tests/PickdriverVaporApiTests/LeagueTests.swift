@@ -266,6 +266,61 @@ final class LeagueTests: XCTestCase {
         }
     }
 
+    func testDeletePendingLeagueByOwnerRemovesLeague() async throws {
+        try await withTestApp { app in
+            _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
+
+            let owner = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(
+                app: app,
+                token: owner.token,
+                name: "Liga Delete",
+                maxPlayers: 2
+            )
+
+            let leagueId = try XCTUnwrap(league.id)
+
+            try await app.test(.DELETE, "/api/leagues/\(leagueId)", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: owner.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+            })
+
+            let deleted = try await League.find(leagueId, on: app.db)
+            XCTAssertNil(deleted)
+        }
+    }
+
+    func testDeleteLeagueFailsWhenNotOwner() async throws {
+        try await withTestApp { app in
+            _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
+
+            let owner = try await TestAuth.register(app: app)
+            let outsider = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(
+                app: app,
+                token: owner.token,
+                name: "Liga Delete NotOwner",
+                maxPlayers: 2
+            )
+
+            let leagueId = try XCTUnwrap(league.id)
+
+            try await app.test(.DELETE, "/api/leagues/\(leagueId)", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: outsider.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .forbidden)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.lowercased().contains("owner"))
+            })
+
+            let existing = try await League.find(leagueId, on: app.db)
+            XCTAssertNotNil(existing)
+        }
+    }
+
     func testLeagueEndpointsRequireToken() async throws {
         try await withTestApp { app in
             try await app.test(.GET, "/api/leagues/my", afterResponse: { res async throws in
@@ -292,4 +347,3 @@ final class LeagueTests: XCTestCase {
         }
     }
 }
-
