@@ -45,6 +45,22 @@ final class DraftPickTests: XCTestCase {
         let yourDeadline: Date
     }
 
+    private struct DraftDetailDTO: Content {
+        struct LeagueRef: Content {
+            let id: Int
+        }
+
+        let id: Int
+        let league: LeagueRef
+        let raceID: Int
+        let pickOrder: [Int]
+        let currentPickIndex: Int
+        let mirrorPicks: Bool
+        let status: String
+        let pickedDriverIDs: [Int?]
+        let bannedDriverIDs: [Int]
+    }
+
     // MARK: - Helpers (API)
 
     private func createLeague(
@@ -102,6 +118,17 @@ final class DraftPickTests: XCTestCase {
             order = try res.content.decode([Int].self)
         })
         return order
+    }
+
+    private func getRaceDraft(app: Application, token: String, leagueID: Int, raceID: Int) async throws -> DraftDetailDTO {
+        var draft: DraftDetailDTO?
+        try await app.test(.GET, "/api/leagues/\(leagueID)/draft/\(raceID)", beforeRequest: { req async throws in
+            req.headers.bearerAuthorization = .init(token: token)
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            draft = try res.content.decode(DraftDetailDTO.self)
+        })
+        return try XCTUnwrap(draft)
     }
 
     private func makePick(
@@ -516,6 +543,60 @@ final class DraftPickTests: XCTestCase {
                 driverID: pickedDriverID,
                 expectedStatus: .ok
             )
+        }
+    }
+
+    func testGetRaceDraftReturnsPickedAndBannedDrivers() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraft3Players(app: app)
+
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertEqual(order.count, 3)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+
+            let firstPick = seeded.driverIDs[0]
+            let secondPick = seeded.driverIDs[1]
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: firstPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await banPick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: firstUserID,
+                driverID: firstPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: secondPick,
+                expectedStatus: .ok
+            )
+
+            let draft = try await getRaceDraft(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+
+            XCTAssertEqual(draft.pickOrder, order)
+            XCTAssertEqual(draft.pickedDriverIDs.count, order.count)
+            XCTAssertEqual(draft.pickedDriverIDs[0], secondPick)
+            XCTAssertNil(draft.pickedDriverIDs[1])
+            XCTAssertNil(draft.pickedDriverIDs[2])
+            XCTAssertTrue(draft.bannedDriverIDs.contains(firstPick))
+            XCTAssertFalse(draft.bannedDriverIDs.contains(secondPick))
         }
     }
 

@@ -11,6 +11,22 @@ import SQLKit
 
 final class DraftTests: XCTestCase {
 
+    private struct DraftDetailDTO: Content {
+        struct LeagueRef: Content {
+            let id: Int
+        }
+
+        let id: Int
+        let league: LeagueRef
+        let raceID: Int
+        let pickOrder: [Int]
+        let currentPickIndex: Int
+        let mirrorPicks: Bool
+        let status: String
+        let pickedDriverIDs: [Int?]
+        let bannedDriverIDs: [Int]
+    }
+
     // MARK: - Payloads
 
     private struct CreateLeaguePayload: Content {
@@ -123,14 +139,14 @@ final class DraftTests: XCTestCase {
         token: String,
         leagueID: Int,
         raceID: Int
-    ) async throws -> RaceDraft {
-        var draft: RaceDraft?
+    ) async throws -> DraftDetailDTO {
+        var draft: DraftDetailDTO?
 
         try await app.test(.GET, "/api/leagues/\(leagueID)/draft/\(raceID)", beforeRequest: { req async throws in
             req.headers.bearerAuthorization = .init(token: token)
         }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
-            draft = try res.content.decode(RaceDraft.self)
+            draft = try res.content.decode(DraftDetailDTO.self)
         })
 
         return try XCTUnwrap(draft)
@@ -274,6 +290,9 @@ final class DraftTests: XCTestCase {
             XCTAssertEqual(draft1.currentPickIndex, 0)
             XCTAssertFalse(draft1.mirrorPicks)
             XCTAssertEqual(draft1.pickOrder, order1)
+            XCTAssertEqual(draft1.pickedDriverIDs.count, order1.count)
+            XCTAssertTrue(draft1.pickedDriverIDs.allSatisfy { $0 == nil })
+            XCTAssertTrue(draft1.bannedDriverIDs.isEmpty)
 
             // Assert: DB row aligns
             let row = try await fetchRaceDraftRow(app: app, leagueID: leagueID, raceID: race1ID)
@@ -342,6 +361,9 @@ final class DraftTests: XCTestCase {
             let draft = try await getRaceDraft(app: app, token: u1.token, leagueID: leagueID, raceID: raceID)
             XCTAssertTrue(draft.mirrorPicks)
             XCTAssertEqual(draft.pickOrder, order)
+            XCTAssertEqual(draft.pickedDriverIDs.count, order.count)
+            XCTAssertTrue(draft.pickedDriverIDs.allSatisfy { $0 == nil })
+            XCTAssertTrue(draft.bannedDriverIDs.isEmpty)
 
             // DB row mirrors flag too
             let row = try await fetchRaceDraftRow(app: app, leagueID: leagueID, raceID: raceID)

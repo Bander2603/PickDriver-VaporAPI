@@ -135,7 +135,7 @@ Notificaciones:
 - GET /api/leagues/:leagueID/draft/:raceID/pick-order
   - Res: [Int] (user IDs)
 - GET /api/leagues/:leagueID/draft/:raceID
-  - Res: RaceDraft
+  - Res: RaceDraft (incluye pickedDriverIDs y bannedDriverIDs)
 - GET /api/leagues/:leagueID/draft/:raceID/deadlines
   - Res: DraftDeadline
 - GET /api/leagues/:leagueID/autopick
@@ -210,7 +210,9 @@ Driver:
 { "id": Int, "seasonID": Int, "teamID": Int, "firstName": String, "lastName": String, "country": String, "driverNumber": Int, "active": Bool, "driverCode": String }
 
 RaceDraft:
-{ "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String }
+{ "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String, "pickedDriverIDs": [Int?], "bannedDriverIDs": [Int] }
+  - pickedDriverIDs esta alineado con pickOrder (mismo largo), con null si no hay pick vigente o fue baneado.
+  - bannedDriverIDs contiene todos los driver_id con is_banned = true para el draft.
 
 DraftDeadline:
 { "raceID": Int, "leagueID": Int, "firstHalfDeadline": Date, "secondHalfDeadline": Date }

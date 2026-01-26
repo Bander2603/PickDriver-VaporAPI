@@ -7,6 +7,7 @@
 
 import Vapor
 import Fluent
+import SQLKit
 
 struct LeagueController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
@@ -458,7 +459,23 @@ struct LeagueController: RouteCollection {
         return AutopickListResponse(driverIDs: orderedUnique)
     }
 
-    func getRaceDraft(_ req: Request) async throws -> RaceDraft {
+    struct RaceDraftResponse: Content {
+        struct LeagueRef: Content {
+            let id: Int
+        }
+
+        let id: Int
+        let league: LeagueRef
+        let raceID: Int
+        let pickOrder: [Int]
+        let currentPickIndex: Int
+        let mirrorPicks: Bool
+        let status: String
+        let pickedDriverIDs: [Int?]
+        let bannedDriverIDs: [Int]
+    }
+
+    func getRaceDraft(_ req: Request) async throws -> RaceDraftResponse {
         let _ = try req.auth.require(User.self)
         guard let leagueID = req.parameters.get("leagueID", as: Int.self),
               let raceID = req.parameters.get("raceID", as: Int.self) else {
@@ -474,7 +491,73 @@ struct LeagueController: RouteCollection {
         else {
             throw Abort(.notFound, reason: "Draft not found.")
         }
-        return draft
+        guard let sql = req.db as? (any SQLDatabase) else {
+            throw Abort(.internalServerError, reason: "SQLDatabase required for draft details.")
+        }
+
+        let draftID = try draft.requireID()
+
+        struct PickRow: Decodable {
+            let user_id: Int
+            let driver_id: Int
+            let is_mirror_pick: Bool
+        }
+
+        struct BannedRow: Decodable {
+            let driver_id: Int
+        }
+
+        struct PickKey: Hashable {
+            let userID: Int
+            let isMirrorPick: Bool
+        }
+
+        let pickRows = try await sql.raw("""
+            SELECT user_id, driver_id, is_mirror_pick
+            FROM player_picks
+            WHERE draft_id = \(bind: draftID)
+              AND is_banned = false
+        """).all(decoding: PickRow.self)
+
+        let bannedRows = try await sql.raw("""
+            SELECT DISTINCT driver_id
+            FROM player_picks
+            WHERE draft_id = \(bind: draftID)
+              AND is_banned = true
+        """).all(decoding: BannedRow.self)
+
+        var picksByKey: [PickKey: Int] = [:]
+        picksByKey.reserveCapacity(pickRows.count)
+        for row in pickRows {
+            picksByKey[PickKey(userID: row.user_id, isMirrorPick: row.is_mirror_pick)] = row.driver_id
+        }
+
+        let pickOrder = draft.pickOrder
+        var pickedDriverIDs = Array<Int?>(repeating: nil, count: pickOrder.count)
+        var seenUsers = Set<Int>()
+        seenUsers.reserveCapacity(pickOrder.count)
+
+        for (index, userID) in pickOrder.enumerated() {
+            let isMirrorPick = draft.mirrorPicks && seenUsers.contains(userID)
+            if let driverID = picksByKey[PickKey(userID: userID, isMirrorPick: isMirrorPick)] {
+                pickedDriverIDs[index] = driverID
+            }
+            seenUsers.insert(userID)
+        }
+
+        let bannedDriverIDs = bannedRows.map { $0.driver_id }.sorted()
+
+        return RaceDraftResponse(
+            id: draftID,
+            league: RaceDraftResponse.LeagueRef(id: leagueID),
+            raceID: draft.raceID,
+            pickOrder: pickOrder,
+            currentPickIndex: draft.currentPickIndex,
+            mirrorPicks: draft.mirrorPicks,
+            status: draft.status,
+            pickedDriverIDs: pickedDriverIDs,
+            bannedDriverIDs: bannedDriverIDs
+        )
     }
 
 
