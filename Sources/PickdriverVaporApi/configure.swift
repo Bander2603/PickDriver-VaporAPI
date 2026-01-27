@@ -13,6 +13,22 @@ public func configure(_ app: Application) async throws {
     app.jwtExpiration = Double(Environment.get("JWT_EXPIRES_IN_SECONDS") ?? "604800")!
     app.emailVerificationExpiration = Double(Environment.get("EMAIL_VERIFICATION_EXPIRES_IN_SECONDS") ?? "86400")!
     app.emailVerificationResendInterval = Double(Environment.get("EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS") ?? "60")!
+    app.emailVerificationLinkBaseURL = Environment.get("EMAIL_VERIFICATION_LINK_BASE")
+        ?? "http://localhost:3000/api/auth/verify-email-link"
+    app.emailVerificationSuccessRedirectURL = Environment.get("EMAIL_VERIFICATION_REDIRECT_URL")
+
+    let emailProvider = (Environment.get("EMAIL_PROVIDER") ?? "log").lowercased()
+    switch emailProvider {
+    case "sendgrid":
+        guard let apiKey = Environment.get("SENDGRID_API_KEY"),
+              let fromEmail = Environment.get("SENDGRID_FROM_EMAIL") else {
+            fatalError("Missing SENDGRID_API_KEY or SENDGRID_FROM_EMAIL for email provider sendgrid.")
+        }
+        let fromName = Environment.get("SENDGRID_FROM_NAME")
+        app.emailService = SendGridEmailService(apiKey: apiKey, fromEmail: fromEmail, fromName: fromName)
+    default:
+        app.emailService = LogEmailService()
+    }
 
     // uncomment to serve files from /Public folder
     // app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))

@@ -78,6 +78,7 @@ struct AuthController: RouteCollection {
         auth.post("register", use: Self.registerHandler)
         auth.post("login", use: Self.loginHandler)
         auth.post("verify-email", use: Self.verifyEmailHandler)
+        auth.get("verify-email-link", use: Self.verifyEmailLinkHandler)
         auth.post("resend-verification", use: Self.resendVerificationHandler)
 
         let protected = auth.grouped(UserAuthenticator())
@@ -114,6 +115,18 @@ struct AuthController: RouteCollection {
         user.emailVerificationExpiresAt = verification.expiresAt
         user.emailVerificationSentAt = Date()
         try await user.save(on: req.db)
+
+        let verificationLink = makeVerificationLink(for: verification.raw, on: req)
+        do {
+            try await req.application.emailService.sendVerificationEmail(
+                to: user.email,
+                username: user.username,
+                verificationLink: verificationLink,
+                on: req
+            )
+        } catch {
+            req.logger.error("❌ [EMAIL] Failed to send verification email: \(String(reflecting: error))")
+        }
 
         let tokenToReturn = req.application.environment == .production ? nil : verification.raw
         return RegisterResponse(
@@ -177,27 +190,24 @@ struct AuthController: RouteCollection {
             throw Abort(.badRequest, reason: "Verification token is required.")
         }
 
-        let tokenHash = hashToken(token)
-        guard let user = try await User.query(on: req.db)
-            .filter(\.$emailVerificationTokenHash == tokenHash)
-            .first()
-        else {
-            throw Abort(.badRequest, reason: "Invalid or expired token.")
-        }
-
-        guard let expiresAt = user.emailVerificationExpiresAt, expiresAt > Date() else {
-            throw Abort(.badRequest, reason: "Invalid or expired token.")
-        }
-
-        if !user.emailVerified {
-            user.emailVerified = true
-            user.emailVerificationTokenHash = nil
-            user.emailVerificationExpiresAt = nil
-            user.emailVerificationSentAt = nil
-            try await user.save(on: req.db)
-        }
+        _ = try await verifyEmailToken(token, on: req)
 
         return VerifyEmailResponse(verified: true)
+    }
+
+    static func verifyEmailLinkHandler(_ req: Request) async throws -> Response {
+        guard let token = req.query[String.self, at: "token"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            throw Abort(.badRequest, reason: "Verification token is required.")
+        }
+
+        _ = try await verifyEmailToken(token, on: req)
+
+        if let redirectURL = req.application.emailVerificationSuccessRedirectURL {
+            return req.redirect(to: redirectURL)
+        }
+
+        return Response(status: .ok, body: .init(string: "Email verified. You can close this window."))
     }
 
     static func resendVerificationHandler(_ req: Request) async throws -> ResendVerificationResponse {
@@ -218,6 +228,18 @@ struct AuthController: RouteCollection {
                     user.emailVerificationExpiresAt = verification.expiresAt
                     user.emailVerificationSentAt = now
                     try await user.save(on: req.db)
+
+                    let verificationLink = makeVerificationLink(for: verification.raw, on: req)
+                    do {
+                        try await req.application.emailService.sendVerificationEmail(
+                            to: user.email,
+                            username: user.username,
+                            verificationLink: verificationLink,
+                            on: req
+                        )
+                    } catch {
+                        req.logger.error("❌ [EMAIL] Failed to resend verification email: \(String(reflecting: error))")
+                    }
 
                     if req.application.environment != .production {
                         tokenToReturn = verification.raw
@@ -271,6 +293,40 @@ struct AuthController: RouteCollection {
         let hash = hashToken(raw)
         let expiresAt = Date().addingTimeInterval(req.application.emailVerificationExpiration)
         return (raw: raw, hash: hash, expiresAt: expiresAt)
+    }
+
+    private static func verifyEmailToken(_ token: String, on req: Request) async throws -> Bool {
+        let tokenHash = hashToken(token)
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$emailVerificationTokenHash == tokenHash)
+            .first()
+        else {
+            throw Abort(.badRequest, reason: "Invalid or expired token.")
+        }
+
+        guard let expiresAt = user.emailVerificationExpiresAt, expiresAt > Date() else {
+            throw Abort(.badRequest, reason: "Invalid or expired token.")
+        }
+
+        if !user.emailVerified {
+            user.emailVerified = true
+            user.emailVerificationTokenHash = nil
+            user.emailVerificationExpiresAt = nil
+            user.emailVerificationSentAt = nil
+            try await user.save(on: req.db)
+        }
+
+        return true
+    }
+
+    private static func makeVerificationLink(for token: String, on req: Request) -> String {
+        guard var components = URLComponents(string: req.application.emailVerificationLinkBaseURL) else {
+            return req.application.emailVerificationLinkBaseURL
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "token", value: token))
+        components.queryItems = queryItems
+        return components.url?.absoluteString ?? req.application.emailVerificationLinkBaseURL
     }
 
     private static func generateTokenString() -> String {
