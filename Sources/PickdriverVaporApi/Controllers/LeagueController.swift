@@ -473,6 +473,7 @@ struct LeagueController: RouteCollection {
         let status: String
         let pickedDriverIDs: [Int?]
         let bannedDriverIDs: [Int]
+        let bannedDriverIDsByPickIndex: [Int?]
     }
 
     func getRaceDraft(_ req: Request) async throws -> RaceDraftResponse {
@@ -503,8 +504,13 @@ struct LeagueController: RouteCollection {
             let is_mirror_pick: Bool
         }
 
-        struct BannedRow: Decodable {
+        struct BannedPickRow: Decodable {
+            let user_id: Int
             let driver_id: Int
+            let is_mirror_pick: Bool
+            let banned_at: Date?
+            let picked_at: Date?
+            let id: Int
         }
 
         struct PickKey: Hashable {
@@ -520,11 +526,12 @@ struct LeagueController: RouteCollection {
         """).all(decoding: PickRow.self)
 
         let bannedRows = try await sql.raw("""
-            SELECT DISTINCT driver_id
+            SELECT id, user_id, driver_id, is_mirror_pick, banned_at, picked_at
             FROM player_picks
             WHERE draft_id = \(bind: draftID)
               AND is_banned = true
-        """).all(decoding: BannedRow.self)
+            ORDER BY banned_at DESC NULLS LAST, picked_at DESC NULLS LAST, id DESC
+        """).all(decoding: BannedPickRow.self)
 
         var picksByKey: [PickKey: Int] = [:]
         picksByKey.reserveCapacity(pickRows.count)
@@ -532,20 +539,37 @@ struct LeagueController: RouteCollection {
             picksByKey[PickKey(userID: row.user_id, isMirrorPick: row.is_mirror_pick)] = row.driver_id
         }
 
+        var bannedByKey: [PickKey: Int] = [:]
+        bannedByKey.reserveCapacity(bannedRows.count)
+        var bannedDriverIDSet = Set<Int>()
+        bannedDriverIDSet.reserveCapacity(bannedRows.count)
+        for row in bannedRows {
+            let key = PickKey(userID: row.user_id, isMirrorPick: row.is_mirror_pick)
+            if bannedByKey[key] == nil {
+                bannedByKey[key] = row.driver_id
+            }
+            bannedDriverIDSet.insert(row.driver_id)
+        }
+
         let pickOrder = draft.pickOrder
         var pickedDriverIDs = Array<Int?>(repeating: nil, count: pickOrder.count)
+        var bannedDriverIDsByPickIndex = Array<Int?>(repeating: nil, count: pickOrder.count)
         var seenUsers = Set<Int>()
         seenUsers.reserveCapacity(pickOrder.count)
 
         for (index, userID) in pickOrder.enumerated() {
             let isMirrorPick = draft.mirrorPicks && seenUsers.contains(userID)
-            if let driverID = picksByKey[PickKey(userID: userID, isMirrorPick: isMirrorPick)] {
+            let key = PickKey(userID: userID, isMirrorPick: isMirrorPick)
+            if let driverID = picksByKey[key] {
                 pickedDriverIDs[index] = driverID
+            }
+            if let bannedDriverID = bannedByKey[key] {
+                bannedDriverIDsByPickIndex[index] = bannedDriverID
             }
             seenUsers.insert(userID)
         }
 
-        let bannedDriverIDs = bannedRows.map { $0.driver_id }.sorted()
+        let bannedDriverIDs = bannedDriverIDSet.sorted()
 
         return RaceDraftResponse(
             id: draftID,
@@ -556,7 +580,8 @@ struct LeagueController: RouteCollection {
             mirrorPicks: draft.mirrorPicks,
             status: draft.status,
             pickedDriverIDs: pickedDriverIDs,
-            bannedDriverIDs: bannedDriverIDs
+            bannedDriverIDs: bannedDriverIDs,
+            bannedDriverIDsByPickIndex: bannedDriverIDsByPickIndex
         )
     }
 

@@ -59,6 +59,7 @@ final class DraftPickTests: XCTestCase {
         let status: String
         let pickedDriverIDs: [Int?]
         let bannedDriverIDs: [Int]
+        let bannedDriverIDsByPickIndex: [Int?]
     }
 
     // MARK: - Helpers (API)
@@ -597,6 +598,10 @@ final class DraftPickTests: XCTestCase {
             XCTAssertNil(draft.pickedDriverIDs[2])
             XCTAssertTrue(draft.bannedDriverIDs.contains(firstPick))
             XCTAssertFalse(draft.bannedDriverIDs.contains(secondPick))
+            XCTAssertEqual(draft.bannedDriverIDsByPickIndex.count, order.count)
+            XCTAssertEqual(draft.bannedDriverIDsByPickIndex[0], firstPick)
+            XCTAssertNil(draft.bannedDriverIDsByPickIndex[1])
+            XCTAssertNil(draft.bannedDriverIDsByPickIndex[2])
         }
     }
 

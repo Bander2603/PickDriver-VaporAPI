@@ -25,6 +25,7 @@ final class DraftTests: XCTestCase {
         let status: String
         let pickedDriverIDs: [Int?]
         let bannedDriverIDs: [Int]
+        let bannedDriverIDsByPickIndex: [Int?]
     }
 
     // MARK: - Payloads
@@ -293,6 +294,8 @@ final class DraftTests: XCTestCase {
             XCTAssertEqual(draft1.pickedDriverIDs.count, order1.count)
             XCTAssertTrue(draft1.pickedDriverIDs.allSatisfy { $0 == nil })
             XCTAssertTrue(draft1.bannedDriverIDs.isEmpty)
+            XCTAssertEqual(draft1.bannedDriverIDsByPickIndex.count, order1.count)
+            XCTAssertTrue(draft1.bannedDriverIDsByPickIndex.allSatisfy { $0 == nil })
 
             // Assert: DB row aligns
             let row = try await fetchRaceDraftRow(app: app, leagueID: leagueID, raceID: race1ID)
@@ -364,6 +367,8 @@ final class DraftTests: XCTestCase {
             XCTAssertEqual(draft.pickedDriverIDs.count, order.count)
             XCTAssertTrue(draft.pickedDriverIDs.allSatisfy { $0 == nil })
             XCTAssertTrue(draft.bannedDriverIDs.isEmpty)
+            XCTAssertEqual(draft.bannedDriverIDsByPickIndex.count, order.count)
+            XCTAssertTrue(draft.bannedDriverIDsByPickIndex.allSatisfy { $0 == nil })
 
             // DB row mirrors flag too
             let row = try await fetchRaceDraftRow(app: app, leagueID: leagueID, raceID: raceID)
