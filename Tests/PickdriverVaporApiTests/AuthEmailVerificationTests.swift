@@ -30,6 +30,15 @@ final class AuthEmailVerificationTests: XCTestCase {
             sent.append(.init(email: email, username: username, verificationLink: verificationLink))
         }
 
+        func sendPasswordResetEmail(
+            to email: String,
+            username: String,
+            resetLink: String,
+            on req: Request
+        ) async throws {
+            sent.append(.init(email: email, username: username, verificationLink: resetLink))
+        }
+
         func last() -> SentEmail? {
             sent.last
         }
@@ -108,7 +117,10 @@ final class AuthEmailVerificationTests: XCTestCase {
             let token = try XCTUnwrap(verificationToken)
             try await app.test(.GET, "/api/auth/verify-email-link?token=\(token)", afterResponse: { res async throws in
                 XCTAssertTrue(res.status == .seeOther || res.status == .found)
-                XCTAssertEqual(res.headers.first(name: .location), "https://client.test/verified")
+                let location = try XCTUnwrap(res.headers.first(name: .location))
+                let components = try XCTUnwrap(URLComponents(string: location))
+                let statusValue = components.queryItems?.first(where: { $0.name == "status" })?.value
+                XCTAssertEqual(statusValue, "success")
             })
 
             let auth = try await TestAuth.login(app: app, email: email, password: password)
@@ -153,6 +165,48 @@ final class AuthEmailVerificationTests: XCTestCase {
         }
     }
 
+    func testVerifyEmailLinkRedirectsWithErrorStatusWhenExpired() async throws {
+        try await withTestApp { app in
+            let emailService = CapturingEmailService()
+            app.emailService = emailService
+            app.emailVerificationSuccessRedirectURL = "https://client.test/verified"
+
+            let username = "user_\(UUID().uuidString.prefix(8))"
+            let email = "expiredredir_\(UUID().uuidString.prefix(8))@test.com"
+            let password = "12345678"
+            var verificationToken: String?
+
+            try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "username": username,
+                    "email": email,
+                    "password": password
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+                let register = try res.content.decode(RegisterResponse.self)
+                verificationToken = register.verificationToken
+            })
+
+            let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let user = try await User.query(on: app.db).filter(\User.$email == normalizedEmail).first()
+            let dbUser = try XCTUnwrap(user)
+            dbUser.emailVerificationExpiresAt = Date().addingTimeInterval(-60)
+            try await dbUser.save(on: app.db)
+
+            let token = try XCTUnwrap(verificationToken)
+            try await app.test(.GET, "/api/auth/verify-email-link?token=\(token)", afterResponse: { res async throws in
+                XCTAssertTrue(res.status == .seeOther || res.status == .found)
+                let location = try XCTUnwrap(res.headers.first(name: .location))
+                let components = try XCTUnwrap(URLComponents(string: location))
+                let statusValue = components.queryItems?.first(where: { $0.name == "status" })?.value
+                let reasonValue = components.queryItems?.first(where: { $0.name == "reason" })?.value
+                XCTAssertEqual(statusValue, "error")
+                XCTAssertEqual(reasonValue, "expired")
+            })
+        }
+    }
+
     func testResendVerificationSendsEmailAgain() async throws {
         try await withTestApp { app in
             let emailService = CapturingEmailService()
@@ -188,4 +242,3 @@ final class AuthEmailVerificationTests: XCTestCase {
         }
     }
 }
-

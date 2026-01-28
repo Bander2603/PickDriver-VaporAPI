@@ -11,11 +11,16 @@ public func configure(_ app: Application) async throws {
     app.http.server.configuration.port = 3000
     app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET")!))
     app.jwtExpiration = Double(Environment.get("JWT_EXPIRES_IN_SECONDS") ?? "604800")!
-    app.emailVerificationExpiration = Double(Environment.get("EMAIL_VERIFICATION_EXPIRES_IN_SECONDS") ?? "86400")!
+    app.emailVerificationExpiration = Double(Environment.get("EMAIL_VERIFICATION_EXPIRES_IN_SECONDS") ?? "1800")!
     app.emailVerificationResendInterval = Double(Environment.get("EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS") ?? "60")!
     app.emailVerificationLinkBaseURL = Environment.get("EMAIL_VERIFICATION_LINK_BASE")
         ?? "http://localhost:3000/api/auth/verify-email-link"
     app.emailVerificationSuccessRedirectURL = Environment.get("EMAIL_VERIFICATION_REDIRECT_URL")
+    app.passwordResetExpiration = Double(Environment.get("PASSWORD_RESET_EXPIRES_IN_SECONDS") ?? "1800")!
+    app.passwordResetResendInterval = Double(Environment.get("PASSWORD_RESET_RESEND_INTERVAL_SECONDS") ?? "60")!
+    app.passwordResetLinkBaseURL = Environment.get("PASSWORD_RESET_LINK_BASE")
+        ?? "http://localhost:3000/api/auth/reset-password-link"
+    app.passwordResetRedirectURL = Environment.get("PASSWORD_RESET_REDIRECT_URL")
 
     let emailProvider = (Environment.get("EMAIL_PROVIDER") ?? "log").lowercased()
     switch emailProvider {
@@ -65,6 +70,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateSeasons())
     app.migrations.add(CreateUsers())
     app.migrations.add(AddEmailVerificationToUsers())
+    app.migrations.add(AddPasswordResetToUsers())
     app.migrations.add(RemoveFirebaseUIDFromUsers())
 
     // F1 domain
@@ -114,7 +120,7 @@ extension Application {
     }
 
     var emailVerificationExpiration: Double {
-        get { self.storage[EmailVerificationExpirationKey.self] ?? 86400 } // 24 hours
+        get { self.storage[EmailVerificationExpirationKey.self] ?? 1800 } // 30 minutes
         set { self.storage[EmailVerificationExpirationKey.self] = newValue }
     }
 
@@ -125,5 +131,23 @@ extension Application {
     var emailVerificationResendInterval: Double {
         get { self.storage[EmailVerificationResendIntervalKey.self] ?? 60 } // 1 minute
         set { self.storage[EmailVerificationResendIntervalKey.self] = newValue }
+    }
+
+    private struct PasswordResetExpirationKey: StorageKey {
+        typealias Value = Double
+    }
+
+    var passwordResetExpiration: Double {
+        get { self.storage[PasswordResetExpirationKey.self] ?? 1800 } // 30 minutes
+        set { self.storage[PasswordResetExpirationKey.self] = newValue }
+    }
+
+    private struct PasswordResetResendIntervalKey: StorageKey {
+        typealias Value = Double
+    }
+
+    var passwordResetResendInterval: Double {
+        get { self.storage[PasswordResetResendIntervalKey.self] ?? 60 } // 1 minute
+        set { self.storage[PasswordResetResendIntervalKey.self] = newValue }
     }
 }

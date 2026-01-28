@@ -59,6 +59,24 @@ struct ResendVerificationResponse: Content {
     let verificationToken: String?
 }
 
+struct RequestPasswordResetRequest: Content {
+    let email: String
+}
+
+struct RequestPasswordResetResponse: Content {
+    let message: String
+    let resetToken: String?
+}
+
+struct ResetPasswordRequest: Content {
+    let token: String
+    let newPassword: String
+}
+
+struct ResetPasswordResponse: Content {
+    let reset: Bool
+}
+
 private enum AuthPolicy {
     static let minUsernameLength = 3
     static let maxUsernameLength = 50
@@ -80,6 +98,9 @@ struct AuthController: RouteCollection {
         auth.post("verify-email", use: Self.verifyEmailHandler)
         auth.get("verify-email-link", use: Self.verifyEmailLinkHandler)
         auth.post("resend-verification", use: Self.resendVerificationHandler)
+        auth.post("request-password-reset", use: Self.requestPasswordResetHandler)
+        auth.post("reset-password", use: Self.resetPasswordHandler)
+        auth.get("reset-password-link", use: Self.resetPasswordLinkHandler)
 
         let protected = auth.grouped(UserAuthenticator())
         protected.get("profile", use: Self.profileHandler)
@@ -190,7 +211,10 @@ struct AuthController: RouteCollection {
             throw Abort(.badRequest, reason: "Verification token is required.")
         }
 
-        _ = try await verifyEmailToken(token, on: req)
+        let status = try await verifyEmailToken(token, on: req)
+        guard status == .success else {
+            throw Abort(.badRequest, reason: "Invalid or expired token.")
+        }
 
         return VerifyEmailResponse(verified: true)
     }
@@ -198,13 +222,35 @@ struct AuthController: RouteCollection {
     static func verifyEmailLinkHandler(_ req: Request) async throws -> Response {
         guard let token = req.query[String.self, at: "token"]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty else {
+            if let redirectURL = req.application.emailVerificationSuccessRedirectURL {
+                let redirectWithStatus = makeRedirectURL(
+                    base: redirectURL,
+                    status: "error",
+                    reason: "missing_token"
+                )
+                return req.redirect(to: redirectWithStatus)
+            }
             throw Abort(.badRequest, reason: "Verification token is required.")
         }
 
-        _ = try await verifyEmailToken(token, on: req)
+        let status = try await verifyEmailToken(token, on: req)
 
         if let redirectURL = req.application.emailVerificationSuccessRedirectURL {
-            return req.redirect(to: redirectURL)
+            switch status {
+            case .success:
+                let redirectWithStatus = makeRedirectURL(base: redirectURL, status: "success", reason: nil)
+                return req.redirect(to: redirectWithStatus)
+            case .invalid:
+                let redirectWithStatus = makeRedirectURL(base: redirectURL, status: "error", reason: "invalid")
+                return req.redirect(to: redirectWithStatus)
+            case .expired:
+                let redirectWithStatus = makeRedirectURL(base: redirectURL, status: "error", reason: "expired")
+                return req.redirect(to: redirectWithStatus)
+            }
+        }
+
+        guard status == .success else {
+            throw Abort(.badRequest, reason: "Invalid or expired token.")
         }
 
         return Response(status: .ok, body: .init(string: "Email verified. You can close this window."))
@@ -254,6 +300,122 @@ struct AuthController: RouteCollection {
         )
     }
 
+    static func requestPasswordResetHandler(_ req: Request) async throws -> RequestPasswordResetResponse {
+        let data = try req.content.decode(RequestPasswordResetRequest.self)
+        let email = normalizeEmail(data.email)
+        let now = Date()
+        var tokenToReturn: String?
+
+        if let user = try await User.query(on: req.db).filter(\.$email == email).first() {
+            let minInterval = req.application.passwordResetResendInterval
+            let shouldThrottle = req.application.environment == .production &&
+                user.passwordResetSentAt.map { now.timeIntervalSince($0) < minInterval } == true
+
+            if !shouldThrottle {
+                let reset = makePasswordResetToken(on: req)
+                user.passwordResetTokenHash = reset.hash
+                user.passwordResetExpiresAt = reset.expiresAt
+                user.passwordResetSentAt = now
+                try await user.save(on: req.db)
+
+                let resetLink = makePasswordResetLink(for: reset.raw, on: req)
+                do {
+                    try await req.application.emailService.sendPasswordResetEmail(
+                        to: user.email,
+                        username: user.username,
+                        resetLink: resetLink,
+                        on: req
+                    )
+                } catch {
+                    req.logger.error("❌ [EMAIL] Failed to send password reset email: \(String(reflecting: error))")
+                }
+
+                if req.application.environment != .production {
+                    tokenToReturn = reset.raw
+                }
+            }
+        }
+
+        return RequestPasswordResetResponse(
+            message: "If the account exists, a password reset email has been sent.",
+            resetToken: tokenToReturn
+        )
+    }
+
+    static func resetPasswordHandler(_ req: Request) async throws -> ResetPasswordResponse {
+        let data = try req.content.decode(ResetPasswordRequest.self)
+        let token = data.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            throw Abort(.badRequest, reason: "Reset token is required.")
+        }
+        guard data.newPassword.count >= AuthPolicy.minPasswordLength else {
+            throw Abort(.badRequest, reason: "Password must be at least \(AuthPolicy.minPasswordLength) characters long.")
+        }
+
+        let result = try await passwordResetStatus(for: token, on: req)
+        guard result.status == .success, let user = result.user else {
+            throw Abort(.badRequest, reason: "Invalid or expired token.")
+        }
+
+        user.passwordHash = try Bcrypt.hash(data.newPassword)
+        user.passwordResetTokenHash = nil
+        user.passwordResetExpiresAt = nil
+        user.passwordResetSentAt = nil
+        try await user.save(on: req.db)
+
+        return ResetPasswordResponse(reset: true)
+    }
+
+    static func resetPasswordLinkHandler(_ req: Request) async throws -> Response {
+        guard let token = req.query[String.self, at: "token"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            if let redirectURL = req.application.passwordResetRedirectURL {
+                let redirectWithStatus = makeRedirectURL(
+                    base: redirectURL,
+                    status: "error",
+                    reason: "missing_token"
+                )
+                return req.redirect(to: redirectWithStatus)
+            }
+            throw Abort(.badRequest, reason: "Reset token is required.")
+        }
+
+        let result = try await passwordResetStatus(for: token, on: req)
+
+        if let redirectURL = req.application.passwordResetRedirectURL {
+            switch result.status {
+            case .success:
+                let redirectWithStatus = makeRedirectURL(
+                    base: redirectURL,
+                    status: "success",
+                    reason: nil,
+                    extraQueryItems: [URLQueryItem(name: "token", value: token)]
+                )
+                return req.redirect(to: redirectWithStatus)
+            case .invalid:
+                let redirectWithStatus = makeRedirectURL(
+                    base: redirectURL,
+                    status: "error",
+                    reason: "invalid"
+                )
+                return req.redirect(to: redirectWithStatus)
+            case .expired:
+                let redirectWithStatus = makeRedirectURL(
+                    base: redirectURL,
+                    status: "error",
+                    reason: "expired"
+                )
+                return req.redirect(to: redirectWithStatus)
+            }
+        }
+
+        guard result.status == .success else {
+            throw Abort(.badRequest, reason: "Invalid or expired token.")
+        }
+
+        return Response(status: .ok, body: .init(string: "Reset token is valid. You can close this window."))
+    }
+
     private static func generateToken(for user: User, on req: Request) throws -> String {
         let timestamp = Int(Date().timeIntervalSince1970 + req.application.jwtExpiration)
         let expiration = ExpirationClaim(value: Date(timeIntervalSince1970: TimeInterval(timestamp)))
@@ -295,17 +457,27 @@ struct AuthController: RouteCollection {
         return (raw: raw, hash: hash, expiresAt: expiresAt)
     }
 
-    private static func verifyEmailToken(_ token: String, on req: Request) async throws -> Bool {
+    private enum TokenStatus {
+        case success
+        case invalid
+        case expired
+    }
+
+    private static func verifyEmailToken(_ token: String, on req: Request) async throws -> TokenStatus {
         let tokenHash = hashToken(token)
         guard let user = try await User.query(on: req.db)
             .filter(\.$emailVerificationTokenHash == tokenHash)
             .first()
         else {
-            throw Abort(.badRequest, reason: "Invalid or expired token.")
+            return .invalid
         }
 
-        guard let expiresAt = user.emailVerificationExpiresAt, expiresAt > Date() else {
-            throw Abort(.badRequest, reason: "Invalid or expired token.")
+        guard let expiresAt = user.emailVerificationExpiresAt else {
+            return .invalid
+        }
+
+        guard expiresAt > Date() else {
+            return .expired
         }
 
         if !user.emailVerified {
@@ -316,7 +488,7 @@ struct AuthController: RouteCollection {
             try await user.save(on: req.db)
         }
 
-        return true
+        return .success
     }
 
     private static func makeVerificationLink(for token: String, on req: Request) -> String {
@@ -327,6 +499,64 @@ struct AuthController: RouteCollection {
         queryItems.append(URLQueryItem(name: "token", value: token))
         components.queryItems = queryItems
         return components.url?.absoluteString ?? req.application.emailVerificationLinkBaseURL
+    }
+
+    private static func makePasswordResetToken(on req: Request) -> (raw: String, hash: String, expiresAt: Date) {
+        let raw = generateTokenString()
+        let hash = hashToken(raw)
+        let expiresAt = Date().addingTimeInterval(req.application.passwordResetExpiration)
+        return (raw: raw, hash: hash, expiresAt: expiresAt)
+    }
+
+    private static func passwordResetStatus(for token: String, on req: Request) async throws -> (status: TokenStatus, user: User?) {
+        let tokenHash = hashToken(token)
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$passwordResetTokenHash == tokenHash)
+            .first()
+        else {
+            return (status: .invalid, user: nil)
+        }
+
+        guard let expiresAt = user.passwordResetExpiresAt else {
+            return (status: .invalid, user: nil)
+        }
+
+        guard expiresAt > Date() else {
+            return (status: .expired, user: nil)
+        }
+
+        return (status: .success, user: user)
+    }
+
+    private static func makePasswordResetLink(for token: String, on req: Request) -> String {
+        guard var components = URLComponents(string: req.application.passwordResetLinkBaseURL) else {
+            return req.application.passwordResetLinkBaseURL
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "token", value: token))
+        components.queryItems = queryItems
+        return components.url?.absoluteString ?? req.application.passwordResetLinkBaseURL
+    }
+
+    private static func makeRedirectURL(
+        base: String,
+        status: String,
+        reason: String?,
+        extraQueryItems: [URLQueryItem] = []
+    ) -> String {
+        guard var components = URLComponents(string: base) else {
+            return base
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "status", value: status))
+        if let reason {
+            queryItems.append(URLQueryItem(name: "reason", value: reason))
+        }
+        if !extraQueryItems.isEmpty {
+            queryItems.append(contentsOf: extraQueryItems)
+        }
+        components.queryItems = queryItems
+        return components.url?.absoluteString ?? base
     }
 
     private static func generateTokenString() -> String {

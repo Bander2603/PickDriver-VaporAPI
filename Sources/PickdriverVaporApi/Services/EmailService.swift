@@ -14,6 +14,13 @@ protocol EmailService: Sendable {
         verificationLink: String,
         on req: Request
     ) async throws
+
+    func sendPasswordResetEmail(
+        to email: String,
+        username: String,
+        resetLink: String,
+        on req: Request
+    ) async throws
 }
 
 struct LogEmailService: EmailService {
@@ -24,6 +31,15 @@ struct LogEmailService: EmailService {
         on req: Request
     ) async throws {
         req.logger.info("📧 [EMAIL] Verification link for \(email): \(verificationLink)")
+    }
+
+    func sendPasswordResetEmail(
+        to email: String,
+        username: String,
+        resetLink: String,
+        on req: Request
+    ) async throws {
+        req.logger.info("📧 [EMAIL] Password reset link for \(email): \(resetLink)")
     }
 }
 
@@ -100,6 +116,54 @@ struct SendGridEmailService: EmailService {
             throw Abort(.internalServerError, reason: "Failed to send verification email.")
         }
     }
+
+    func sendPasswordResetEmail(
+        to email: String,
+        username: String,
+        resetLink: String,
+        on req: Request
+    ) async throws {
+        let subject = "Restablece tu contraseña"
+        let textBody = """
+        Hola \(username),
+
+        Para restablecer tu contraseña, abre el siguiente enlace:
+        \(resetLink)
+
+        Si no solicitaste este cambio, puedes ignorar este correo.
+        """
+        let htmlBody = """
+        <p>Hola \(username),</p>
+        <p>Para restablecer tu contraseña, abre el siguiente enlace:</p>
+        <p><a href="\(resetLink)">Restablecer contraseña</a></p>
+        <p>Si no solicitaste este cambio, puedes ignorar este correo.</p>
+        """
+
+        let payload = SendGridRequest(
+            personalizations: [
+                Personalization(
+                    to: [EmailAddress(email: email, name: username)],
+                    subject: subject
+                )
+            ],
+            from: EmailAddress(email: fromEmail, name: fromName),
+            content: [
+                ContentItem(type: "text/plain", value: textBody),
+                ContentItem(type: "text/html", value: htmlBody)
+            ]
+        )
+
+        var headers = HTTPHeaders()
+        headers.add(name: "Authorization", value: "Bearer \(apiKey)")
+
+        let response = try await req.client.post(URI(string: "https://api.sendgrid.com/v3/mail/send"), headers: headers) { clientReq in
+            try clientReq.content.encode(payload, as: .json)
+        }
+
+        guard response.status == .accepted else {
+            throw Abort(.internalServerError, reason: "Failed to send password reset email.")
+        }
+    }
 }
 
 extension Application {
@@ -128,5 +192,23 @@ extension Application {
     var emailVerificationSuccessRedirectURL: String? {
         get { self.storage[EmailVerificationSuccessRedirectKey.self] ?? nil }
         set { self.storage[EmailVerificationSuccessRedirectKey.self] = newValue }
+    }
+
+    private struct PasswordResetLinkBaseKey: StorageKey {
+        typealias Value = String
+    }
+
+    var passwordResetLinkBaseURL: String {
+        get { self.storage[PasswordResetLinkBaseKey.self] ?? "http://localhost:3000/api/auth/reset-password-link" }
+        set { self.storage[PasswordResetLinkBaseKey.self] = newValue }
+    }
+
+    private struct PasswordResetRedirectKey: StorageKey {
+        typealias Value = String?
+    }
+
+    var passwordResetRedirectURL: String? {
+        get { self.storage[PasswordResetRedirectKey.self] ?? nil }
+        set { self.storage[PasswordResetRedirectKey.self] = newValue }
     }
 }

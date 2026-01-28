@@ -36,6 +36,15 @@ final class User: Model, @unchecked Sendable, Authenticatable {
     @OptionalField(key: "email_verification_sent_at")
     var emailVerificationSentAt: Date?
 
+    @OptionalField(key: "password_reset_token_hash")
+    var passwordResetTokenHash: String?
+
+    @OptionalField(key: "password_reset_expires_at")
+    var passwordResetExpiresAt: Date?
+
+    @OptionalField(key: "password_reset_sent_at")
+    var passwordResetSentAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -68,4 +77,3 @@ extension User {
         Public(id: id, username: username, email: email, emailVerified: emailVerified)
     }
 }
-
