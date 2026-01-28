@@ -29,6 +29,17 @@ struct APIErrorResponse: Content {
     var reason: String
 }
 
+// MARK: - Invite helpers
+
+enum TestInvite {
+    static func create(app: Application, code: String? = nil) async throws -> String {
+        let value = code ?? "invite_\(UUID().uuidString.prefix(10))"
+        let invite = InviteCode(code: value)
+        try await invite.save(on: app.db)
+        return invite.code
+    }
+}
+
 // MARK: - Auth helpers
 
 enum TestAuth {
@@ -50,36 +61,25 @@ enum TestAuth {
         let u = username ?? "user_\(UUID().uuidString.prefix(8))"
         let e = email ?? "\(UUID().uuidString.prefix(8))@test.com"
         let normalizedEmail = e.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let inviteCode = try await TestInvite.create(app: app)
 
         var token: String = ""
         var publicUser: User.Public?
-        var verificationToken: String?
 
         try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
             try req.content.encode([
                 "username": u,
                 "email": e,
-                "password": password
+                "password": password,
+                "inviteCode": inviteCode
             ])
         }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
             let register = try res.content.decode(RegisterResponse.self)
             XCTAssertEqual(register.user.username, u)
             XCTAssertEqual(register.user.email, normalizedEmail)
-            XCTAssertTrue(register.verificationRequired)
-            verificationToken = register.verificationToken
             publicUser = register.user
         })
-
-        if let verificationToken {
-            try await app.test(.POST, "/api/auth/verify-email", beforeRequest: { req async throws in
-                try req.content.encode([
-                    "token": verificationToken
-                ])
-            }, afterResponse: { res async throws in
-                XCTAssertEqual(res.status, .ok)
-            })
-        }
 
         let auth = try await login(app: app, email: normalizedEmail, password: password)
         token = auth.token

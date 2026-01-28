@@ -27,23 +27,8 @@ final class User: Model, @unchecked Sendable, Authenticatable {
     @Field(key: "email_verified")
     var emailVerified: Bool
 
-    @OptionalField(key: "email_verification_token_hash")
-    var emailVerificationTokenHash: String?
-
-    @OptionalField(key: "email_verification_expires_at")
-    var emailVerificationExpiresAt: Date?
-
-    @OptionalField(key: "email_verification_sent_at")
-    var emailVerificationSentAt: Date?
-
-    @OptionalField(key: "password_reset_token_hash")
-    var passwordResetTokenHash: String?
-
-    @OptionalField(key: "password_reset_expires_at")
-    var passwordResetExpiresAt: Date?
-
-    @OptionalField(key: "password_reset_sent_at")
-    var passwordResetSentAt: Date?
+    @OptionalField(key: "google_id")
+    var googleID: String?
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?

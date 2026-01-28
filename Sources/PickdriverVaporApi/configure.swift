@@ -11,29 +11,7 @@ public func configure(_ app: Application) async throws {
     app.http.server.configuration.port = 3000
     app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET")!))
     app.jwtExpiration = Double(Environment.get("JWT_EXPIRES_IN_SECONDS") ?? "604800")!
-    app.emailVerificationExpiration = Double(Environment.get("EMAIL_VERIFICATION_EXPIRES_IN_SECONDS") ?? "1800")!
-    app.emailVerificationResendInterval = Double(Environment.get("EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS") ?? "60")!
-    app.emailVerificationLinkBaseURL = Environment.get("EMAIL_VERIFICATION_LINK_BASE")
-        ?? "http://localhost:3000/api/auth/verify-email-link"
-    app.emailVerificationSuccessRedirectURL = Environment.get("EMAIL_VERIFICATION_REDIRECT_URL")
-    app.passwordResetExpiration = Double(Environment.get("PASSWORD_RESET_EXPIRES_IN_SECONDS") ?? "1800")!
-    app.passwordResetResendInterval = Double(Environment.get("PASSWORD_RESET_RESEND_INTERVAL_SECONDS") ?? "60")!
-    app.passwordResetLinkBaseURL = Environment.get("PASSWORD_RESET_LINK_BASE")
-        ?? "http://localhost:3000/api/auth/reset-password-link"
-    app.passwordResetRedirectURL = Environment.get("PASSWORD_RESET_REDIRECT_URL")
-
-    let emailProvider = (Environment.get("EMAIL_PROVIDER") ?? "log").lowercased()
-    switch emailProvider {
-    case "sendgrid":
-        guard let apiKey = Environment.get("SENDGRID_API_KEY"),
-              let fromEmail = Environment.get("SENDGRID_FROM_EMAIL") else {
-            fatalError("Missing SENDGRID_API_KEY or SENDGRID_FROM_EMAIL for email provider sendgrid.")
-        }
-        let fromName = Environment.get("SENDGRID_FROM_NAME")
-        app.emailService = SendGridEmailService(apiKey: apiKey, fromEmail: fromEmail, fromName: fromName)
-    default:
-        app.emailService = LogEmailService()
-    }
+    app.googleClientID = Environment.get("GOOGLE_CLIENT_ID")
 
     // uncomment to serve files from /Public folder
     // app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
@@ -70,7 +48,8 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateSeasons())
     app.migrations.add(CreateUsers())
     app.migrations.add(AddEmailVerificationToUsers())
-    app.migrations.add(AddPasswordResetToUsers())
+    app.migrations.add(AddGoogleIDToUsers())
+    app.migrations.add(AddInviteCodes())
     app.migrations.add(RemoveFirebaseUIDFromUsers())
 
     // F1 domain
@@ -113,6 +92,15 @@ extension Application {
     var jwtExpiration: Double {
         get { self.storage[JWTExpirationKey.self] ?? 604800 } // 7 days
         set { self.storage[JWTExpirationKey.self] = newValue }
+    }
+
+    private struct GoogleClientIDKey: StorageKey {
+        typealias Value = String
+    }
+
+    var googleClientID: String? {
+        get { self.storage[GoogleClientIDKey.self] }
+        set { self.storage[GoogleClientIDKey.self] = newValue }
     }
 
     private struct EmailVerificationExpirationKey: StorageKey {

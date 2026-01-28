@@ -11,7 +11,6 @@
 - JWT HS256
 - Header: Authorization: Bearer <token>
 - Expiracion: JWT_EXPIRES_IN_SECONDS (default 604800)
-- Login requiere email verificado
 
 ## Errores
 - Formato (Vapor): { "error": true, "reason": "..." }
@@ -28,19 +27,14 @@ curl -H "Authorization: Bearer <token>" \
 ```
 
 ## Flujo de autenticacion recomendado
-1) POST /api/auth/register
-2) Click en el link de verificacion recibido por email (GET /api/auth/verify-email-link?token=...)
-   - Alternativa para clientes: POST /api/auth/verify-email (token recibido por email)
-3) POST /api/auth/login -> token JWT
-4) Enviar token en Authorization para el resto de endpoints protegidos
+1) POST /api/auth/register (requiere inviteCode)
+2) POST /api/auth/login -> token JWT
+3) Enviar token en Authorization para el resto de endpoints protegidos
 
-## Flujo de restablecer contraseña recomendado
-1) POST /api/auth/request-password-reset (email)
-2) Click en el link recibido por email (GET /api/auth/reset-password-link?token=...)
-3) POST /api/auth/reset-password (token + newPassword)
+Alternativa:
+- POST /api/auth/google (login/registro con Google; si es registro requiere inviteCode)
 
 Notas:
-- El login falla si el email no esta verificado.
 - No hay refresh token; cuando expira el JWT, se re-login.
 
 ## Validaciones y reglas de negocio clave
@@ -49,15 +43,10 @@ Auth:
 - email: max 100, validacion por regex, se normaliza a lowercase
 - password: minimo 8 caracteres
 - update password: no puede ser igual a la actual
-- resend verification: en produccion se limita por EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS
-- expiracion tokens email: EMAIL_VERIFICATION_EXPIRES_IN_SECONDS y PASSWORD_RESET_EXPIRES_IN_SECONDS (default 1800 = 30 min)
-- email verification link base: EMAIL_VERIFICATION_LINK_BASE (default http://localhost:3000/api/auth/verify-email-link)
-- email verification redirect (opcional): EMAIL_VERIFICATION_REDIRECT_URL (si se define, el link redirige al front)
-- proveedor de email: EMAIL_PROVIDER = sendgrid | log (default log)
-- SendGrid: SENDGRID_API_KEY, SENDGRID_FROM_EMAIL, SENDGRID_FROM_NAME(opcional)
-- password reset link base: PASSWORD_RESET_LINK_BASE (default http://localhost:3000/api/auth/reset-password-link)
-- password reset redirect (opcional): PASSWORD_RESET_REDIRECT_URL
-- password reset resend interval: PASSWORD_RESET_RESEND_INTERVAL_SECONDS (default 60)
+- register requiere inviteCode (codigo de invitacion)
+- si INVITE_CODE esta configurado en el backend, solo ese codigo es valido
+- si INVITE_CODE no existe, se validan codigos en tabla `invite_codes` (no usados)
+- Google auth: requiere GOOGLE_CLIENT_ID en el backend
 
 Ligas y equipos:
 - Crear liga requiere temporada activa.
@@ -88,32 +77,15 @@ Notificaciones:
 
 ### Auth
 - POST /api/auth/register
-  - Req: { "username": "user", "email": "a@b.com", "password": "..." }
-  - Res: { "user": UserPublic, "verificationRequired": true, "verificationToken": "..."? }
-  - Nota: verificationToken solo en no-produccion.
+  - Req: { "username": "user", "email": "a@b.com", "password": "...", "inviteCode": "INVITE" }
+  - Res: { "user": UserPublic }
 - POST /api/auth/login
   - Req: { "email": "a@b.com", "password": "..." }
   - Res: { "user": UserPublic, "token": "..." }
-- POST /api/auth/verify-email
-  - Req: { "token": "..." }
-  - Res: { "verified": true }
-- GET /api/auth/verify-email-link?token=...
-  - Res: 200 OK (texto simple) o redirect a EMAIL_VERIFICATION_REDIRECT_URL
-  - Si hay redirect: agrega query params `status=success|error` y `reason=invalid|expired|missing_token` (solo en error)
-- POST /api/auth/request-password-reset
-  - Req: { "email": "a@b.com" }
-  - Res: { "message": "...", "resetToken": "..."? }
-  - Nota: resetToken solo en no-produccion.
-- GET /api/auth/reset-password-link?token=...
-  - Res: 200 OK (texto simple) o redirect a PASSWORD_RESET_REDIRECT_URL
-  - Si hay redirect: agrega query params `status=success|error` y `reason=invalid|expired|missing_token` (solo en error)
-  - En success agrega `token=...` para que el front envíe el POST de reset
-- POST /api/auth/reset-password
-  - Req: { "token": "...", "newPassword": "..." }
-  - Res: { "reset": true }
-- POST /api/auth/resend-verification
-  - Req: { "email": "a@b.com" }
-  - Res: { "message": "...", "verificationToken": "..."? }
+- POST /api/auth/google
+  - Req: { "idToken": "...", "inviteCode": "INVITE"? }
+  - Res: { "user": UserPublic, "token": "..." }
+  - Nota: inviteCode requerido si el usuario no existe aun.
 - GET /api/auth/profile (auth)
   - Res: UserPublic
 - PUT /api/auth/password (auth)
