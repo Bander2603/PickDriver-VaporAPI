@@ -176,12 +176,13 @@ struct AuthController: RouteCollection {
             return AuthResponse(user: user.convertToPublic(), token: token)
         }
 
-        guard let inviteCode = data.inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !inviteCode.isEmpty else {
-            throw Abort(.forbidden, reason: "Invite code is required.")
+        let invite: InviteCode?
+        if let inviteCode = data.inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !inviteCode.isEmpty {
+            invite = try await requireInviteCode(inviteCode, on: req)
+        } else {
+            invite = nil
         }
-
-        let invite = try await requireInviteCode(inviteCode, on: req)
         let username = try await generateUniqueUsername(
             base: makeUsernameBase(from: tokenInfo, email: normalizedEmail),
             on: req

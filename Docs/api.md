@@ -32,7 +32,7 @@ curl -H "Authorization: Bearer <token>" \
 3) Enviar token en Authorization para el resto de endpoints protegidos
 
 Alternativa:
-- POST /api/auth/google (login/registro con Google; si es registro requiere inviteCode)
+- POST /api/auth/google (login/registro con Google; no requiere inviteCode)
 
 Notas:
 - No hay refresh token; cuando expira el JWT, se re-login.
@@ -43,7 +43,7 @@ Auth:
 - email: max 100, validacion por regex, se normaliza a lowercase
 - password: minimo 8 caracteres
 - update password: no puede ser igual a la actual
-- register requiere inviteCode (codigo de invitacion)
+- register con email/password requiere inviteCode (codigo de invitacion)
 - si INVITE_CODE esta configurado en el backend, solo ese codigo es valido
 - si INVITE_CODE no existe, se validan codigos en tabla `invite_codes` (no usados)
 - Google auth: requiere GOOGLE_CLIENT_ID en el backend
@@ -85,7 +85,7 @@ Notificaciones:
 - POST /api/auth/google
   - Req: { "idToken": "...", "inviteCode": "INVITE"? }
   - Res: { "user": UserPublic, "token": "..." }
-  - Nota: inviteCode requerido si el usuario no existe aun.
+  - Nota: inviteCode es opcional (Google no requiere invitacion).
 - GET /api/auth/profile (auth)
   - Res: UserPublic
 - PUT /api/auth/password (auth)
