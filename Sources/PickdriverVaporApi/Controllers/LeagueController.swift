@@ -57,6 +57,16 @@ struct LeagueController: RouteCollection {
     func createLeague(_ req: Request) async throws -> League.Public {
         let user = try req.auth.require(User.self)
         let data = try req.content.decode(CreateLeagueRequest.self)
+        let userID = try user.requireID()
+
+        let activeLeagueCount = try await League.query(on: req.db)
+            .filter(\.$creator.$id == userID)
+            .filter(\.$status ~~ ["pending", "active"])
+            .count()
+
+        guard activeLeagueCount < 3 else {
+            throw Abort(.badRequest, reason: "League creation limit reached. You can only have 3 pending or active leagues.")
+        }
 
         let code = generateUniqueCode()
 
@@ -71,7 +81,7 @@ struct LeagueController: RouteCollection {
             name: data.name,
             code: code,
             status: "pending",
-            creatorID: try user.requireID(),
+            creatorID: userID,
             teamsEnabled: data.teamsEnabled,
             bansEnabled: data.bansEnabled,
             mirrorEnabled: data.mirrorEnabled,

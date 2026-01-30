@@ -47,7 +47,7 @@ struct GoogleAuthRequest: Content {
 
 private enum AuthPolicy {
     static let minUsernameLength = 3
-    static let maxUsernameLength = 50
+    static let maxUsernameLength = 20
     static let minPasswordLength = 8
     static let maxEmailLength = 100
 }
@@ -68,6 +68,7 @@ struct AuthController: RouteCollection {
         let protected = auth.grouped(UserAuthenticator())
         protected.get("profile", use: Self.profileHandler)
         protected.put("password", use: Self.updatePasswordHandler)
+        protected.put("username", use: Self.updateUsernameHandler)
     }
 
     static func registerHandler(_ req: Request) async throws -> RegisterResponse {
@@ -77,7 +78,7 @@ struct AuthController: RouteCollection {
         let inviteCode = data.inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard isValidUsername(username) else {
-            throw Abort(.badRequest, reason: "Username must be 3-50 characters and use only letters, numbers, dots, dashes, or underscores.")
+            throw Abort(.badRequest, reason: "Username must be 3-20 characters and use only letters, numbers, dots, dashes, or underscores.")
         }
         guard isValidEmail(email) else {
             throw Abort(.badRequest, reason: "Email format is invalid.")
@@ -152,6 +153,33 @@ struct AuthController: RouteCollection {
         try await user.save(on: req.db)
 
         return .ok
+    }
+
+    static func updateUsernameHandler(_ req: Request) async throws -> User.Public {
+        let data = try req.content.decode(UpdateUsernameRequest.self)
+        let user = try req.auth.require(User.self)
+        let username = normalizeUsername(data.username)
+
+        guard isValidUsername(username) else {
+            throw Abort(.badRequest, reason: "Username must be 3-20 characters and use only letters, numbers, dots, dashes, or underscores.")
+        }
+
+        if username == user.username {
+            return user.convertToPublic()
+        }
+
+        let userID = try user.requireID()
+        if try await User.query(on: req.db)
+            .filter(\.$username == username)
+            .filter(\.$id != userID)
+            .first() != nil {
+            throw Abort(.conflict, reason: "Username already in use.")
+        }
+
+        user.username = username
+        try await user.save(on: req.db)
+
+        return user.convertToPublic()
     }
 
     static func googleAuthHandler(_ req: Request) async throws -> AuthResponse {

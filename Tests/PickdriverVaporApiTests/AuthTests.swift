@@ -217,6 +217,24 @@ final class AuthTests: XCTestCase {
         }
     }
 
+    func testUpdateUsernameHappyPath() async throws {
+        try await withTestApp { app in
+            let created = try await TestAuth.register(app: app)
+            let newUsername = "user_\(UUID().uuidString.prefix(8))"
+
+            try await app.test(.PUT, "/api/auth/username", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: created.token)
+                try req.content.encode([
+                    "username": newUsername
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+                let user = try res.content.decode(User.Public.self)
+                XCTAssertEqual(user.username, newUsername)
+            })
+        }
+    }
+
     func testUpdatePasswordRequiresToken() async throws {
         try await withTestApp { app in
             try await app.test(.PUT, "/api/auth/password", beforeRequest: { req async throws in

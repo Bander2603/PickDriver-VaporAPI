@@ -39,7 +39,7 @@ Notas:
 
 ## Validaciones y reglas de negocio clave
 Auth:
-- username: 3-50 caracteres; solo letras/numeros/._-
+- username: 3-20 caracteres; solo letras/numeros/._-
 - email: max 100, validacion por regex, se normaliza a lowercase
 - password: minimo 8 caracteres
 - update password: no puede ser igual a la actual
@@ -50,6 +50,8 @@ Auth:
 
 Ligas y equipos:
 - Crear liga requiere temporada activa.
+- Maximo 3 ligas creadas por usuario (status "pending" o "active"). Ligas completadas o eliminadas no cuentan.
+- Como miembro, un jugador puede unirse a todas las ligas que desee.
 - Unirse solo si la liga esta en status "pending" y no supera max_players.
 - assign-pick-order y start-draft: solo owner.
 - Equipos solo si la liga esta "pending" y teams_enabled = true.
@@ -91,6 +93,9 @@ Notificaciones:
 - PUT /api/auth/password (auth)
   - Req: { "currentPassword": "...", "newPassword": "..." }
   - Res: 200 OK
+- PUT /api/auth/username (auth)
+  - Req: { "username": "nuevo_nombre" }
+  - Res: UserPublic
 
 ### Races (publico)
 - GET /api/races
