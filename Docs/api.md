@@ -99,27 +99,31 @@ Notificaciones:
 
 ### Races (publico)
 - GET /api/races
-  - Res: Race[]
+  - Res: Race[] (solo temporada activa)
 - GET /api/races/upcoming
-  - Res: Race[]
+  - Res: Race[] (solo temporada activa)
 - GET /api/races/current
-  - Res: Race
+  - Res: Race (solo temporada activa)
 - GET /api/races/:raceID
   - Res: Race
 
 ### Drivers (publico)
 - GET /api/drivers
-  - Res: Driver[]
+  - Res: Driver[] (solo temporada activa)
+
+### F1 Teams (publico)
+- GET /api/f1/teams
+  - Res: F1Team[] (solo temporada activa)
 
 ### Standings F1 (publico)
 - GET /api/standings/f1/drivers
-  - Res: DriverStanding[]
+  - Res: DriverStanding[] (solo temporada activa)
 - GET /api/standings/f1/teams
-  - Res: TeamStanding[]
+  - Res: TeamStanding[] (solo temporada activa)
 
 ### Leagues (auth)
 - GET /api/leagues/my
-  - Res: LeaguePublic[]
+  - Res: LeaguePublic[] (solo temporada activa)
 - POST /api/leagues/create
   - Req: { "name": "...", "maxPlayers": 8, "teamsEnabled": true, "bansEnabled": true, "mirrorEnabled": true }
   - Res: LeaguePublic
@@ -213,6 +217,9 @@ Race:
 
 Driver:
 { "id": Int, "seasonID": Int, "teamID": Int, "firstName": String, "lastName": String, "country": String, "driverNumber": Int, "active": Bool, "driverCode": String }
+
+F1Team:
+{ "id": Int, "seasonID": Int, "name": String, "color": String }
 
 RaceDraft:
 { "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String, "pickedDriverIDs": [Int?], "bannedDriverIDs": [Int], "bannedDriverIDsByPickIndex": [Int?] }

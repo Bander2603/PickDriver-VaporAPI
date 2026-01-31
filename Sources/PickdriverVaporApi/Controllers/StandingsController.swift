@@ -17,6 +17,7 @@ struct StandingsController: RouteCollection {
 
     func getDriverStandings(_ req: Request) async throws -> [DriverStanding] {
         let sql = req.db as! any SQLDatabase
+        let activeSeasonID = try await Season.requireActiveID(on: req.db)
         return try await sql.raw("""
             WITH latest_team_per_driver AS (
                 SELECT DISTINCT ON (rr.driver_id)
@@ -28,6 +29,7 @@ struct StandingsController: RouteCollection {
                 JOIN f1_teams t ON rr.f1_team_id = t.id
                 JOIN races r ON rr.race_id = r.id
                 WHERE r.completed = true
+                  AND r.season_id = \(bind: activeSeasonID)
                 ORDER BY rr.driver_id, r.round DESC
             ),
             driver_points AS (
@@ -37,6 +39,7 @@ struct StandingsController: RouteCollection {
                 FROM race_results rr
                 JOIN races r ON rr.race_id = r.id
                 WHERE r.completed = true
+                  AND r.season_id = \(bind: activeSeasonID)
                 GROUP BY rr.driver_id
             )
             SELECT
@@ -58,6 +61,7 @@ struct StandingsController: RouteCollection {
 
     func getTeamStandings(_ req: Request) async throws -> [TeamStanding] {
         let sql = req.db as! any SQLDatabase
+        let activeSeasonID = try await Season.requireActiveID(on: req.db)
         return try await sql.raw("""
             SELECT 
                 t.id AS team_id,
@@ -66,6 +70,9 @@ struct StandingsController: RouteCollection {
                 COALESCE(SUM(rr.points + COALESCE(rr.sprint_points, 0)), 0) AS points
             FROM race_results rr
             JOIN f1_teams t ON rr.f1_team_id = t.id
+            JOIN races r ON rr.race_id = r.id
+            WHERE r.completed = true
+              AND r.season_id = \(bind: activeSeasonID)
             GROUP BY t.id, t.name, t.color
             ORDER BY points DESC
         """).all(decoding: TeamStanding.self)

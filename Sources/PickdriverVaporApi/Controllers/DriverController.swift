@@ -15,6 +15,10 @@ struct DriverController: RouteCollection {
     }
 
     func getAllHandler(_ req: Request) async throws -> [Driver] {
-        try await Driver.query(on: req.db).all()
+        let activeSeasonID = try await Season.requireActiveID(on: req.db)
+
+        return try await Driver.query(on: req.db)
+            .filter(\.$seasonID == activeSeasonID)
+            .all()
     }
 }

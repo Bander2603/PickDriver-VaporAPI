@@ -40,6 +40,7 @@ struct LeagueController: RouteCollection {
 
     func getMyLeagues(_ req: Request) async throws -> [League.Public] {
         let user = try req.auth.require(User.self)
+        let activeSeasonID = try await Season.requireActiveID(on: req.db)
 
         let memberships = try await LeagueMember.query(on: req.db)
             .filter(\.$user.$id == user.requireID())
@@ -49,6 +50,7 @@ struct LeagueController: RouteCollection {
 
         let leagues = try await League.query(on: req.db)
             .filter(\.$id ~~ leagueIDs)
+            .filter(\.$seasonID == activeSeasonID)
             .all()
 
         return leagues.map { $0.convertToPublic() }

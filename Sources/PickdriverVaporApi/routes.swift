@@ -11,6 +11,7 @@ func routes(_ app: Application) throws {
     // 🔐 Public controllers under /api/*
     try api.register(collection: RaceController())
     try api.register(collection: DriverController())
+    try api.register(collection: F1TeamController())
     try api.register(collection: StandingsController())
     try api.register(collection: NotificationController())
 

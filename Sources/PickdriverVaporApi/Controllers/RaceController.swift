@@ -26,18 +26,29 @@ struct RaceController: RouteCollection {
     }
 
     func getAllHandler(_ req: Request) async throws -> [Race] {
-        try await Race.query(on: req.db).sort(\.$round).all()
+        let activeSeasonID = try await Season.requireActiveID(on: req.db)
+
+        return try await Race.query(on: req.db)
+            .filter(\.$seasonID == activeSeasonID)
+            .sort(\.$round)
+            .all()
     }
 
     func getUpcomingHandler(_ req: Request) async throws -> [Race] {
-        try await Race.query(on: req.db)
+        let activeSeasonID = try await Season.requireActiveID(on: req.db)
+
+        return try await Race.query(on: req.db)
+            .filter(\.$seasonID == activeSeasonID)
             .filter(\.$raceTime > Date())
             .sort(\.$raceTime)
             .all()
     }
 
     func getCurrentHandler(_ req: Request) async throws -> Race {
+        let activeSeasonID = try await Season.requireActiveID(on: req.db)
+
         guard let race = try await Race.query(on: req.db)
+            .filter(\.$seasonID == activeSeasonID)
             .filter(\.$completed == false)
             .filter(\.$raceTime > Date())
             .sort(\.$raceTime)
