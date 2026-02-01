@@ -5,6 +5,9 @@
 //  Created by Eduardo Melcon Diez on 28.01.26.
 //
 
+
+// NOT IMPLEMENTED. MAYBE IN A FUTURE?
+
 import Vapor
 
 protocol EmailService: Sendable {

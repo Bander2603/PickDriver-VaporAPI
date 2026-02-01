@@ -1,4 +1,5 @@
 import NIOSSL
+import NIOCore
 import Fluent
 import FluentPostgresDriver
 import Vapor
@@ -79,6 +80,20 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreatePushTokens())
     app.migrations.add(CreatePushNotifications())
 
+    if app.environment != .testing {
+        let initialDelaySeconds = Int64(Environment.get("DRAFT_DEADLINE_INITIAL_DELAY_SECONDS") ?? "5") ?? 5
+        let intervalSeconds = Int64(Environment.get("DRAFT_DEADLINE_INTERVAL_SECONDS") ?? "60") ?? 60
+
+        app.draftDeadlineTask = app.eventLoopGroup.next().scheduleRepeatedTask(
+            initialDelay: .seconds(initialDelaySeconds),
+            delay: .seconds(intervalSeconds)
+        ) { _ in
+            Task {
+                await DraftDeadlineProcessor.processExpiredDrafts(app: app)
+            }
+        }
+    }
+
     // register routes
     try routes(app)
 }
@@ -137,5 +152,14 @@ extension Application {
     var passwordResetResendInterval: Double {
         get { self.storage[PasswordResetResendIntervalKey.self] ?? 60 } // 1 minute
         set { self.storage[PasswordResetResendIntervalKey.self] = newValue }
+    }
+
+    private struct DraftDeadlineTaskKey: StorageKey {
+        typealias Value = RepeatedTask
+    }
+
+    var draftDeadlineTask: RepeatedTask? {
+        get { self.storage[DraftDeadlineTaskKey.self] }
+        set { self.storage[DraftDeadlineTaskKey.self] = newValue }
     }
 }

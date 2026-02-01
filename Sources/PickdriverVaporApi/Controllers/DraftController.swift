@@ -35,125 +35,6 @@ struct DraftController: RouteCollection {
         let yourDeadline: Date
     }
 
-    private func advanceExpiredTurns(
-        draft: RaceDraft,
-        league: League,
-        deadlines: DraftDeadline,
-        now: Date,
-        sql: any SQLDatabase
-    ) async throws {
-        let pickOrder = draft.pickOrder
-        guard !pickOrder.isEmpty else { return }
-
-        var index = draft.currentPickIndex
-        var advanced = false
-        let firstHalfCount = (pickOrder.count + 1) / 2
-        let draftID = try draft.requireID()
-        let leagueID = try league.requireID()
-
-        while index < pickOrder.count {
-            let deadline = index < firstHalfCount ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
-            if now <= deadline { break }
-            let currentTurnUserID = pickOrder[index]
-            let isMirrorPick = draft.mirrorPicks && pickOrder.prefix(index).contains(currentTurnUserID)
-            _ = try await attemptAutopick(
-                draftID: draftID,
-                leagueID: leagueID,
-                userID: currentTurnUserID,
-                isMirrorPick: isMirrorPick,
-                sql: sql
-            )
-            index += 1
-            advanced = true
-        }
-
-        if advanced {
-            let row = try await sql.raw("""
-                UPDATE race_drafts
-                SET current_pick_index = GREATEST(current_pick_index, \(bind: index))
-                WHERE id = \(bind: draftID)
-                RETURNING current_pick_index
-            """).first(decoding: [String: Int].self)
-            if let current = row?["current_pick_index"] {
-                draft.currentPickIndex = current
-            } else {
-                draft.currentPickIndex = index
-            }
-        }
-    }
-
-    private func attemptAutopick(
-        draftID: Int,
-        leagueID: Int,
-        userID: Int,
-        isMirrorPick: Bool,
-        sql: any SQLDatabase
-    ) async throws -> Int? {
-        let existingPick = try await sql.raw("""
-            SELECT 1 FROM player_picks
-            WHERE draft_id = \(bind: draftID)
-              AND user_id = \(bind: userID)
-              AND is_banned = false
-              AND is_mirror_pick = \(bind: isMirrorPick)
-            LIMIT 1
-        """).first()
-
-        guard existingPick == nil else { return nil }
-
-        let autopickRow = try await sql.raw("""
-            SELECT driver_order FROM player_autopicks
-            WHERE league_id = \(bind: leagueID)
-              AND user_id = \(bind: userID)
-            LIMIT 1
-        """).first(decoding: [String: [Int]].self)
-
-        guard let driverOrder = autopickRow?["driver_order"], !driverOrder.isEmpty else {
-            return nil
-        }
-
-        let bannedDrivers = try await sql.raw("""
-            SELECT driver_id FROM player_picks
-            WHERE draft_id = \(bind: draftID)
-              AND user_id = \(bind: userID)
-              AND is_banned = true
-        """).all(decoding: [String: Int].self).map { $0["driver_id"]! }
-
-        let pickedDrivers = try await sql.raw("""
-            SELECT driver_id FROM player_picks
-            WHERE draft_id = \(bind: draftID)
-              AND is_banned = false
-        """).all(decoding: [String: Int].self).map { $0["driver_id"]! }
-
-        let availableDrivers = driverOrder.filter { !bannedDrivers.contains($0) && !pickedDrivers.contains($0) }
-
-        for driverID in availableDrivers {
-            let inserted = try await sql.raw("""
-                INSERT INTO player_picks (draft_id, user_id, driver_id, is_banned, is_mirror_pick, is_autopick, picked_at)
-                VALUES (\(bind: draftID), \(bind: userID), \(bind: driverID), false, \(bind: isMirrorPick), true, NOW())
-                ON CONFLICT DO NOTHING
-                RETURNING id
-            """).first(decoding: [String: Int].self)
-
-            if inserted != nil {
-                return driverID
-            }
-
-            let pickExists = try await sql.raw("""
-                SELECT 1 FROM player_picks
-                WHERE draft_id = \(bind: draftID)
-                  AND user_id = \(bind: userID)
-                  AND is_banned = false
-                  AND is_mirror_pick = \(bind: isMirrorPick)
-                LIMIT 1
-            """).first()
-
-            if pickExists != nil {
-                return nil
-            }
-        }
-
-        return nil
-    }
     
     func makePick(_ req: Request) async throws -> DraftResponse {
         let sql = req.db as! any SQLDatabase
@@ -185,7 +66,16 @@ struct DraftController: RouteCollection {
 
         let draftID = try draft.requireID()
         let deadlines = try await LeagueController().getDraftDeadlines(req)
-        try await advanceExpiredTurns(draft: draft, league: league, deadlines: deadlines, now: now, sql: sql)
+        draft.currentPickIndex = try await DraftDeadlineProcessor.advanceExpiredTurns(
+            draftID: draftID,
+            leagueID: leagueID,
+            pickOrder: draft.pickOrder,
+            currentPickIndex: draft.currentPickIndex,
+            mirrorPicks: draft.mirrorPicks,
+            deadlines: deadlines,
+            now: now,
+            sql: sql
+        )
 
         let pickOrder = draft.pickOrder
         guard draft.currentPickIndex >= 0 && draft.currentPickIndex < pickOrder.count else {
@@ -384,7 +274,16 @@ struct DraftController: RouteCollection {
         // Get pick positions
         let pickOrder = draft.pickOrder
         let deadlines = try await LeagueController().getDraftDeadlines(req)
-        try await advanceExpiredTurns(draft: draft, league: league, deadlines: deadlines, now: now, sql: sql)
+        draft.currentPickIndex = try await DraftDeadlineProcessor.advanceExpiredTurns(
+            draftID: draftID,
+            leagueID: leagueID,
+            pickOrder: draft.pickOrder,
+            currentPickIndex: draft.currentPickIndex,
+            mirrorPicks: draft.mirrorPicks,
+            deadlines: deadlines,
+            now: now,
+            sql: sql
+        )
 
         guard draft.currentPickIndex >= 0 && draft.currentPickIndex < pickOrder.count else {
             throw Abort(.badRequest, reason: "Draft is already completed")
