@@ -117,9 +117,9 @@ Notificaciones:
 
 ### Standings F1 (publico)
 - GET /api/standings/f1/drivers
-  - Res: DriverStanding[] (solo temporada activa)
+  - Res: DriverStanding[] (solo temporada activa; incluye 0 puntos si no hay resultados)
 - GET /api/standings/f1/teams
-  - Res: TeamStanding[] (solo temporada activa)
+  - Res: TeamStanding[] (solo temporada activa; incluye 0 puntos si no hay resultados)
 
 ### Leagues (auth)
 - GET /api/leagues/my

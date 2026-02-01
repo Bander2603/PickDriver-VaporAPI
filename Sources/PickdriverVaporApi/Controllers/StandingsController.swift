@@ -47,14 +47,16 @@ struct StandingsController: RouteCollection {
                 d.first_name,
                 d.last_name,
                 d.driver_code,
-                dp.points,
-                ltpd.f1_team_id AS team_id,
-                ltpd.team_name,
-                ltpd.team_color
+                COALESCE(dp.points, 0) AS points,
+                COALESCE(ltpd.f1_team_id, d.f1_team_id) AS team_id,
+                COALESCE(ltpd.team_name, t.name) AS team_name,
+                COALESCE(ltpd.team_color, t.color) AS team_color
             FROM drivers d
-            JOIN driver_points dp ON dp.driver_id = d.id
-            JOIN latest_team_per_driver ltpd ON ltpd.driver_id = d.id
-            ORDER BY dp.points DESC
+            JOIN f1_teams t ON d.f1_team_id = t.id
+            LEFT JOIN driver_points dp ON dp.driver_id = d.id
+            LEFT JOIN latest_team_per_driver ltpd ON ltpd.driver_id = d.id
+            WHERE d.season_id = \(bind: activeSeasonID)
+            ORDER BY points DESC, d.last_name ASC
         """).all(decoding: DriverStanding.self)
     }
 
@@ -68,13 +70,14 @@ struct StandingsController: RouteCollection {
                 t.name,
                 t.color,
                 COALESCE(SUM(rr.points + COALESCE(rr.sprint_points, 0)), 0) AS points
-            FROM race_results rr
-            JOIN f1_teams t ON rr.f1_team_id = t.id
-            JOIN races r ON rr.race_id = r.id
-            WHERE r.completed = true
+            FROM f1_teams t
+            LEFT JOIN race_results rr ON rr.f1_team_id = t.id
+            LEFT JOIN races r ON rr.race_id = r.id
+              AND r.completed = true
               AND r.season_id = \(bind: activeSeasonID)
+            WHERE t.season_id = \(bind: activeSeasonID)
             GROUP BY t.id, t.name, t.color
-            ORDER BY points DESC
+            ORDER BY points DESC, t.name ASC
         """).all(decoding: TeamStanding.self)
     }
 }
