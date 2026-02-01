@@ -67,7 +67,8 @@ Draft:
 - Pick: solo el usuario del turno; en ligas con equipos, en la ultima hora antes de fp1 un companero puede pickear por el turno actual.
 - Ban: solo si bans_enabled = true; solo se puede banear el pick inmediatamente anterior.
 - No se puede banear al ultimo jugador del orden (salvo que sea tambien el primero).
-- Bans restantes: 2 por usuario o 3 por equipo (si teams_enabled).
+- Bans restantes: 2 por usuario (sin equipos) o 3 por equipo (si teams_enabled).
+- Restriccion por carrera: cada usuario/equipo solo puede usar 1 ban por carrera; en ligas sin equipos, un jugador solo puede ser baneado una vez por carrera.
 - Autopick: si hay lista y vence el turno, se intenta pick automatico.
 
 Notificaciones:

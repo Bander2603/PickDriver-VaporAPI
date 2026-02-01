@@ -369,20 +369,6 @@ struct DraftController: RouteCollection {
             throw Abort(.forbidden, reason: "You cannot ban the last player in the draft.")
         }
         
-        // Prevent banning same user more than once
-        let duplicateBan = try await sql.raw("""
-            SELECT 1 FROM player_picks
-            WHERE draft_id = \(bind: draftID)
-              AND user_id = \(bind: data.targetUserID)
-              AND is_banned = true
-              AND banned_by = \(bind: userID)
-            LIMIT 1
-        """).first()
-        
-        if duplicateBan != nil {
-            throw Abort(.forbidden, reason: "You already banned this player in this draft.")
-        }
-        
         // Check if the ban target pick exists
         guard let _ = try await sql.raw("""
             SELECT 1 FROM player_picks
@@ -420,19 +406,22 @@ struct DraftController: RouteCollection {
 
         let isMyTurn = currentTurnUserID == userID
         var isTeammate = false
+        var myTeamID: Int?
+
+        if isTeamLeague {
+            myTeamID = try await TeamMember.query(on: req.db)
+                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
+                .filter(TeamMember.self, \TeamMember.$user.$id == userID)
+                .first()?
+                .$team.id
+        }
 
         if !isMyTurn && isTeamLeague {
             let currentTurnTeamID = try await TeamMember.query(on: req.db)
                 .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
                 .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
                 .filter(TeamMember.self, \TeamMember.$user.$id == currentTurnUserID)
-                .first()?
-                .$team.id
-
-            let myTeamID = try await TeamMember.query(on: req.db)
-                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
-                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
-                .filter(TeamMember.self, \TeamMember.$user.$id == userID)
                 .first()?
                 .$team.id
 
@@ -448,17 +437,53 @@ struct DraftController: RouteCollection {
         guard data.targetUserID == expectedTargetUserID else {
             throw Abort(.forbidden, reason: "You can only ban the previous pick")
         }
-        
-        let (banKeyField, banKeyValue, isTeamScope): (String, Int, Bool) = try await {
-            if isTeamLeague {
-                let teamID = try await TeamMember.query(on: req.db)
-                    .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
-                    .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
-                    .filter(\TeamMember.$user.$id == userID)
-                    .first()?
-                    .$team.id
 
-                guard let teamID else {
+        if isTeamLeague {
+            guard let myTeamID else {
+                throw Abort(.badRequest, reason: "Could not resolve team ID")
+            }
+
+            let existingTeamBan = try await sql.raw("""
+                SELECT 1 FROM player_picks pp
+                JOIN team_members tm ON tm.user_id = pp.banned_by
+                WHERE pp.draft_id = \(bind: draftID)
+                  AND pp.is_banned = true
+                  AND tm.team_id = \(bind: myTeamID)
+                LIMIT 1
+            """).first()
+
+            guard existingTeamBan == nil else {
+                throw Abort(.badRequest, reason: "Your team already used its ban for this race.")
+            }
+        } else {
+            let existingUserBan = try await sql.raw("""
+                SELECT 1 FROM player_picks
+                WHERE draft_id = \(bind: draftID)
+                  AND is_banned = true
+                  AND banned_by = \(bind: userID)
+                LIMIT 1
+            """).first()
+
+            guard existingUserBan == nil else {
+                throw Abort(.badRequest, reason: "You already used your ban for this race.")
+            }
+
+            let targetAlreadyBanned = try await sql.raw("""
+                SELECT 1 FROM player_picks
+                WHERE draft_id = \(bind: draftID)
+                  AND is_banned = true
+                  AND user_id = \(bind: data.targetUserID)
+                LIMIT 1
+            """).first()
+
+            guard targetAlreadyBanned == nil else {
+                throw Abort(.badRequest, reason: "That player has already been banned in this race.")
+            }
+        }
+        
+        let (banKeyField, banKeyValue, isTeamScope): (String, Int, Bool) = try {
+            if isTeamLeague {
+                guard let teamID = myTeamID else {
                     throw Abort(.badRequest, reason: "Could not resolve team ID")
                 }
 

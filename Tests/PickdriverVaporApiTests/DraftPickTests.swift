@@ -34,6 +34,18 @@ final class DraftPickTests: XCTestCase {
         let driverID: Int
     }
 
+    private struct CreateTeamPayload: Content {
+        let leagueID: Int
+        let name: String
+        let userIDs: [Int]
+
+        enum CodingKeys: String, CodingKey {
+            case leagueID = "league_id"
+            case name
+            case userIDs = "user_ids"
+        }
+    }
+
     // Mirror of DraftController.DraftResponse (kept local so tests don’t depend on controller internals)
     private struct DraftResponseDTO: Content {
         let status: String
@@ -100,6 +112,27 @@ final class DraftPickTests: XCTestCase {
         }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
         })
+    }
+
+    private func createTeam(
+        app: Application,
+        token: String,
+        leagueID: Int,
+        name: String,
+        userIDs: [Int]
+    ) async throws -> LeagueTeam {
+
+        var created: LeagueTeam?
+
+        try await app.test(.POST, "/api/teams", beforeRequest: { req async throws in
+            req.headers.bearerAuthorization = .init(token: token)
+            try req.content.encode(CreateTeamPayload(leagueID: leagueID, name: name, userIDs: userIDs))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            created = try res.content.decode(LeagueTeam.self)
+        })
+
+        return try XCTUnwrap(created)
     }
 
     private func startDraft(app: Application, token: String, leagueID: Int) async throws {
@@ -343,6 +376,96 @@ final class DraftPickTests: XCTestCase {
         return (leagueID: leagueID, raceID: raceID, fp1: fp1, users: users, driverIDs: driverIDs)
     }
 
+    private func seedTeamDraft4Players(
+        app: Application
+    ) async throws -> (
+        leagueID: Int,
+        raceID: Int,
+        fp1: Date,
+        users: UsersByID,
+        driverIDs: [Int],
+        teamByUser: [Int: Int]
+    ) {
+        let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+        let seasonID = try season.requireID()
+
+        let now = Date()
+        let fp1 = now.addingTimeInterval(7 * 24 * 3600)
+
+        let race = try await TestSeed.createRace(
+            app: app,
+            seasonID: seasonID,
+            round: 1,
+            name: "Race Team DraftPick",
+            completed: false,
+            fp1Time: fp1,
+            raceTime: fp1.addingTimeInterval(2 * 24 * 3600)
+        )
+        let raceID = try race.requireID()
+
+        let f1Team = try await TestSeed.createF1Team(app: app, seasonID: seasonID, name: "Seed Team", color: "#000000")
+        let d1 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "A", lastName: "One", driverNumber: 11, driverCode: "A11")
+        let d2 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "B", lastName: "Two", driverNumber: 22, driverCode: "B22")
+        let d3 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "C", lastName: "Three", driverNumber: 33, driverCode: "C33")
+        let d4 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "D", lastName: "Four", driverNumber: 44, driverCode: "D44")
+        let driverIDs = [
+            try d1.requireID(),
+            try d2.requireID(),
+            try d3.requireID(),
+            try d4.requireID()
+        ]
+
+        let u1 = try await TestAuth.register(app: app)
+        let u2 = try await TestAuth.register(app: app)
+        let u3 = try await TestAuth.register(app: app)
+        let u4 = try await TestAuth.register(app: app)
+
+        let league = try await createLeague(
+            app: app,
+            token: u1.token,
+            name: "DraftPick League Teams",
+            maxPlayers: 4,
+            teamsEnabled: true,
+            bansEnabled: true,
+            mirrorEnabled: false
+        )
+        let leagueID = try XCTUnwrap(league.id)
+
+        try await joinLeague(app: app, token: u2.token, code: league.code)
+        try await joinLeague(app: app, token: u3.token, code: league.code)
+        try await joinLeague(app: app, token: u4.token, code: league.code)
+
+        let id1 = try XCTUnwrap(u1.publicUser.id)
+        let id2 = try XCTUnwrap(u2.publicUser.id)
+        let id3 = try XCTUnwrap(u3.publicUser.id)
+        let id4 = try XCTUnwrap(u4.publicUser.id)
+
+        let teamA = try await createTeam(app: app, token: u1.token, leagueID: leagueID, name: "Team A", userIDs: [id1, id2])
+        let teamB = try await createTeam(app: app, token: u1.token, leagueID: leagueID, name: "Team B", userIDs: [id3, id4])
+
+        let teamAID = try XCTUnwrap(teamA.id)
+        let teamBID = try XCTUnwrap(teamB.id)
+
+        try await startDraft(app: app, token: u1.token, leagueID: leagueID)
+
+        let teamByUser: [Int: Int] = [
+            id1: teamAID,
+            id2: teamAID,
+            id3: teamBID,
+            id4: teamBID
+        ]
+
+        let users = UsersByID(map: [id1: u1, id2: u2, id3: u3, id4: u4])
+        return (
+            leagueID: leagueID,
+            raceID: raceID,
+            fp1: fp1,
+            users: users,
+            driverIDs: driverIDs,
+            teamByUser: teamByUser
+        )
+    }
+
     // MARK: - Tests
 
     func testMakePickHappyPath_advancesTurn_andCreatesPlayerPickRow() async throws {
@@ -500,6 +623,139 @@ final class DraftPickTests: XCTestCase {
             let remaining = try await fetchBansRemaining(app: app, draftID: draftRow.draftID, userID: secondUserID)
             XCTAssertNotNil(remaining, "Expected player_bans row to exist for user scope ban")
             XCTAssertEqual(remaining, 1)
+        }
+    }
+
+    func testBanPickFailsWhenUserAlreadyUsedBanThisRace_returnsBadRequest() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraft3Players(app: app)
+
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+
+            let firstPick = seeded.driverIDs[0]
+            let secondPick = seeded.driverIDs[1]
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: firstPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await banPick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: firstUserID,
+                driverID: firstPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: secondPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await banPick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: firstUserID,
+                driverID: secondPick,
+                expectedStatus: .badRequest
+            )
+        }
+    }
+
+    func testBanPickFailsWhenTeamAlreadyUsedBanThisRace_returnsBadRequest() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedTeamDraft4Players(app: app)
+
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertEqual(order.count, 4)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+            let thirdUserID = order[2]
+            let fourthUserID = order[3]
+
+            let teamAtSecond = try XCTUnwrap(seeded.teamByUser[secondUserID])
+            let teamAtFourth = try XCTUnwrap(seeded.teamByUser[fourthUserID])
+            XCTAssertEqual(teamAtSecond, teamAtFourth, "Expected teammates at positions 1 and 3 in round-robin order")
+
+            let firstPick = seeded.driverIDs[0]
+            let secondPick = seeded.driverIDs[1]
+            let thirdPick = seeded.driverIDs[2]
+            let fourthPick = seeded.driverIDs[3]
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: firstPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await banPick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: firstUserID,
+                driverID: firstPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: secondPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: thirdPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: thirdUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: fourthPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await banPick(
+                app: app,
+                token: seeded.users.token(for: fourthUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: thirdUserID,
+                driverID: fourthPick,
+                expectedStatus: .badRequest
+            )
         }
     }
 

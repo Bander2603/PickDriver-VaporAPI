@@ -102,7 +102,11 @@ Este documento resume las reglas reales implementadas en la API para ligas, draf
 - Solo si `bansEnabled = true`.
 - Solo se puede banear el pick inmediatamente anterior.
 - No se puede banear al ultimo jugador del orden (salvo que tambien sea el primero).
-- No se permite banear la misma persona mas de una vez por el mismo banner.
+- Ligas sin equipos:
+  - cada usuario solo puede banear una vez por carrera.
+  - un jugador solo puede ser baneado una vez por carrera.
+- Ligas con equipos:
+  - cada equipo solo puede banear una vez por carrera.
 - Permisos:
   - sin equipos: solo el usuario del turno
   - con equipos: el usuario del turno o un companero
@@ -110,6 +114,7 @@ Este documento resume las reglas reales implementadas en la API para ligas, draf
 ### Cantidad de bans
 - Sin equipos: 2 bans por usuario.
 - Con equipos: 3 bans por equipo.
+- Restriccion por carrera: cada usuario/equipo solo puede usar 1 ban por carrera; en ligas sin equipos, un jugador solo puede ser baneado una vez por carrera.
 
 ### Efectos
 - Marca el pick como baneado (`is_banned = true`) y guarda `banned_by`.
@@ -126,4 +131,3 @@ Este documento resume las reglas reales implementadas en la API para ligas, draf
 - Al iniciar draft se notifica al primer usuario del orden.
 - Al completar un pick se notifica al siguiente usuario.
 - Al publicar resultados se generan notificaciones asociadas a la carrera.
-
