@@ -374,14 +374,14 @@ final class StandingsTests: XCTestCase {
             )
             try await markRaceCompleted(app: app, raceID: try race1.requireID())
 
-            let standingsAfterRace1 = try await fetchPlayerStandings(app: app, token: u1.token, leagueID: leagueID)
-            XCTAssertEqual(standingsAfterRace1.count, 2)
+            let standingsAfterRound1 = try await fetchPlayerStandings(app: app, token: u1.token, leagueID: leagueID)
+            XCTAssertEqual(standingsAfterRound1.count, 2)
 
-            let byUserAfterRace1 = Dictionary(uniqueKeysWithValues: standingsAfterRace1.map { ($0.user_id, $0) })
-            XCTAssertEqual(byUserAfterRace1[u1ID]?.total_points, 25.0)
-            XCTAssertEqual(byUserAfterRace1[u2ID]?.total_points, 18.0)
-            XCTAssertNil(byUserAfterRace1[u1ID]?.team_id)
-            XCTAssertEqual(standingsAfterRace1.first?.user_id, u1ID)
+            let byUserAfterRound1 = Dictionary(uniqueKeysWithValues: standingsAfterRound1.map { ($0.user_id, $0) })
+            XCTAssertEqual(byUserAfterRound1[u1ID]?.total_points, 25.0)
+            XCTAssertEqual(byUserAfterRound1[u2ID]?.total_points, 18.0)
+            XCTAssertNil(byUserAfterRound1[u1ID]?.team_id)
+            XCTAssertEqual(standingsAfterRound1.first?.user_id, u1ID)
 
             try await insertRaceResults(
                 app: app,
@@ -394,13 +394,13 @@ final class StandingsTests: XCTestCase {
             )
             try await markRaceCompleted(app: app, raceID: try race2.requireID())
 
-            let standingsAfterRace2 = try await fetchPlayerStandings(app: app, token: u1.token, leagueID: leagueID)
-            XCTAssertEqual(standingsAfterRace2.count, 2)
+            let standingsAfterRound2 = try await fetchPlayerStandings(app: app, token: u1.token, leagueID: leagueID)
+            XCTAssertEqual(standingsAfterRound2.count, 2)
 
-            let byUserAfterRace2 = Dictionary(uniqueKeysWithValues: standingsAfterRace2.map { ($0.user_id, $0) })
-            XCTAssertEqual(byUserAfterRace2[u1ID]?.total_points, 25.0)
-            XCTAssertEqual(byUserAfterRace2[u2ID]?.total_points, 43.0)
-            XCTAssertEqual(standingsAfterRace2.first?.user_id, u2ID)
+            let byUserAfterRound2 = Dictionary(uniqueKeysWithValues: standingsAfterRound2.map { ($0.user_id, $0) })
+            XCTAssertEqual(byUserAfterRound2[u1ID]?.total_points, 25.0)
+            XCTAssertEqual(byUserAfterRound2[u2ID]?.total_points, 43.0)
+            XCTAssertEqual(standingsAfterRound2.first?.user_id, u2ID)
         }
     }
 

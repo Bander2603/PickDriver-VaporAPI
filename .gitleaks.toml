@@ -1,0 +1,6 @@
+[allowlist]
+description = "False positives from gitleaks in tests"
+regexes = [
+  "standingsAfterRace1\\.map",
+  "standingsAfterRace2\\.map",
+]

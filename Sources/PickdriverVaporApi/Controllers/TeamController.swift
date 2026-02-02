@@ -19,7 +19,8 @@ struct TeamController: RouteCollection {
 
     func createTeam(_ req: Request) async throws -> LeagueTeam {
         let user = try req.auth.require(User.self)
-        print("🟢 Creating team request by user ID: \(try user.requireID())")
+        let userID = try user.requireID()
+        req.logger.info("Teams: create request", metadata: ["user_id": "\(userID)"])
 
         struct Input: Content {
             let leagueID: Int
@@ -34,13 +35,16 @@ struct TeamController: RouteCollection {
         }
 
         let data = try req.content.decode(Input.self)
-        print("📝 Received team creation data: \(data)")
+        req.logger.debug("Teams: create payload received", metadata: [
+            "league_id": "\(data.leagueID)",
+            "member_count": "\(data.userIDs?.count ?? 0)"
+        ])
 
         let league = try await LeagueAccess.requireMember(req, leagueID: data.leagueID)
 
         guard league.status == "pending",
               league.teamsEnabled else {
-            print("❌ Invalid league or conditions not met for team creation.")
+            req.logger.warning("Teams: create rejected due to league conditions", metadata: ["league_id": "\(data.leagueID)"])
             throw Abort(.badRequest, reason: "Team creation not allowed.")
         }
 
@@ -103,7 +107,8 @@ struct TeamController: RouteCollection {
 
     func updateTeam(_ req: Request) async throws -> LeagueTeam {
         let user = try req.auth.require(User.self)
-        print("🟡 Updating team request by user ID: \(try user.requireID())")
+        let userID = try user.requireID()
+        req.logger.info("Teams: update request", metadata: ["user_id": "\(userID)"])
 
         struct Input: Content {
             let name: String
@@ -116,12 +121,12 @@ struct TeamController: RouteCollection {
         }
 
         let data = try req.content.decode(Input.self)
-        print("📝 Update team data: \(data)")
+        req.logger.debug("Teams: update payload received", metadata: ["member_count": "\(data.userIDs?.count ?? 0)"])
 
         guard let team = try await LeagueTeam.find(req.parameters.get("teamID"), on: req.db),
               let league = try await League.find(team.$league.id, on: req.db),
               league.status == "pending" else {
-            print("❌ Cannot edit team or league conditions not met.")
+            req.logger.warning("Teams: update rejected due to league conditions", metadata: ["team_id": "\(req.parameters.get("teamID") ?? "")"])
             throw Abort(.badRequest, reason: "Cannot edit team.")
         }
 
@@ -209,12 +214,13 @@ struct TeamController: RouteCollection {
 
     func deleteTeam(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
-        print("🔴 Delete team request by user ID: \(try user.requireID())")
+        let userID = try user.requireID()
+        req.logger.info("Teams: delete request", metadata: ["user_id": "\(userID)"])
 
         guard let team = try await LeagueTeam.find(req.parameters.get("teamID"), on: req.db),
               let league = try await League.find(team.$league.id, on: req.db),
               league.status == "pending" else {
-            print("❌ Cannot delete team. League invalid or not pending.")
+            req.logger.warning("Teams: delete rejected due to league conditions", metadata: ["team_id": "\(req.parameters.get("teamID") ?? "")"])
             throw Abort(.badRequest, reason: "Cannot delete team.")
         }
 
@@ -234,20 +240,22 @@ struct TeamController: RouteCollection {
             .filter(\.$team.$id == teamID)
             .all()
 
+        req.logger.debug("Teams: removing team members", metadata: ["member_count": "\(members.count)"])
         for member in members {
-            print("🧹 Removing team member ID: \(member.id ?? -1)")
             try await member.delete(on: req.db)
         }
 
         try await team.delete(on: req.db)
-        print("✅ Team deleted with ID: \(try team.requireID())")
+        let deletedTeamID = try team.requireID()
+        req.logger.info("Teams: deleted", metadata: ["team_id": "\(deletedTeamID)"])
 
         return .ok
     }
 
     func assignUserToTeam(_ req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
-        print("🔵 Assign user to team request by user ID: \(try user.requireID())")
+        let userID = try user.requireID()
+        req.logger.info("Teams: assign request", metadata: ["user_id": "\(userID)"])
 
         guard let teamID = req.parameters.get("teamID", as: Int.self) else {
             throw Abort(.badRequest, reason: "Invalid team ID")
@@ -255,7 +263,7 @@ struct TeamController: RouteCollection {
 
         struct Input: Content { let userID: Int }
         let data = try req.content.decode(Input.self)
-        print("📝 Assigning user ID \(data.userID) to team ID \(teamID)")
+        req.logger.debug("Teams: assign payload received", metadata: ["team_id": "\(teamID)"])
 
         guard let team = try await LeagueTeam.find(teamID, on: req.db) else {
             throw Abort(.notFound, reason: "Team not found")
@@ -314,8 +322,7 @@ struct TeamController: RouteCollection {
 
         let assignment = TeamMember(userID: data.userID, teamID: try team.requireID())
         try await assignment.save(on: req.db)
-        print("✅ User \(data.userID) assigned to team \(teamID)")
+        req.logger.info("Teams: assigned", metadata: ["team_id": "\(teamID)"])
         return .ok
     }
 }
-

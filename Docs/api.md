@@ -1,11 +1,14 @@
 # PickDriver API (Vapor) - Documentacion para cliente web (.NET/Blazor)
 
 ## Base URL
-- Produccion: https://api.pickdriver.cc
+- Produccion: https://api.example.com
 - Prefijo: /api
 - Content-Type: application/json
 - Fechas: ISO 8601 (UTC)
 - JSON keys: camelCase por defecto (nombres Swift). Algunos DTOs y query params usan snake_case; ver endpoints/modelos.
+
+## Aviso de marcas
+Este proyecto es independiente y no esta afiliado ni respaldado por Formula 1, la FIA ni entidades relacionadas. No se usan logos ni assets oficiales. “Formula 1”, “F1” y marcas relacionadas pertenecen a sus respectivos propietarios y se mencionan solo con fines descriptivos.
 
 ## Autenticacion
 - JWT HS256
@@ -23,7 +26,7 @@
 Ejemplo:
 ```bash
 curl -H "Authorization: Bearer <token>" \
-  https://api.pickdriver.cc/api/leagues/my
+  https://api.example.com/api/leagues/my
 ```
 
 ## Flujo de autenticacion recomendado

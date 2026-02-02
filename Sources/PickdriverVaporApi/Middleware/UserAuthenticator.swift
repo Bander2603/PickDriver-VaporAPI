@@ -12,33 +12,33 @@ import Fluent
 struct UserAuthenticator: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
         guard let bearer = request.headers.bearerAuthorization else {
-            print("🔴 [AUTH] No bearer token found")
+            request.logger.warning("Auth: missing bearer token")
             throw Abort(.unauthorized, reason: "Missing Bearer token")
         }
 
-        print("🟢 [AUTH] Bearer token received")
+        request.logger.debug("Auth: bearer token received")
 
         // 1) Verify JWT ONLY (and only catch JWT verification errors)
         let payload: UserPayload
         do {
             payload = try request.jwt.verify(bearer.token, as: UserPayload.self)
-            print("✅ [AUTH] Verified payload: \(payload)")
+            request.logger.debug("Auth: JWT verified")
         } catch {
-            print("❌ [AUTH] JWT verification failed: \(String(reflecting: error))")
+            request.logger.warning("Auth: JWT verification failed")
             throw Abort(.unauthorized, reason: "Invalid or expired token")
         }
 
         // 2) Load user
         let userId = payload.id
-        print("🔎 [AUTH] Trying to find user ID: \(userId)")
+        request.logger.debug("Auth: loading user for token", metadata: ["user_id": "\(userId)"])
 
         guard let user = try await User.find(userId, on: request.db) else {
-            print("❌ [AUTH] User ID \(userId) not found in database")
+            request.logger.warning("Auth: user not found", metadata: ["user_id": "\(userId)"])
             throw Abort(.unauthorized, reason: "User not found")
         }
 
         request.auth.login(user)
-        print("🔓 [AUTH] Logged in user ID: \(userId)")
+        request.logger.info("Auth: user authenticated", metadata: ["user_id": "\(userId)"])
 
         // 3) IMPORTANT: Do NOT wrap this in the JWT catch
         // Let downstream Abort(.badRequest/.unauthorized/...) pass through unchanged

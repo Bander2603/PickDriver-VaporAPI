@@ -432,7 +432,7 @@ struct DraftController: RouteCollection {
         
         // Special deadline handling
         if userID == pickOrder.first && data.targetUserID == pickOrder.last && now < deadlines.firstHalfDeadline {
-            print("⚠️ Special deadline handling triggered: first user will use second half deadline")
+            req.logger.notice("Drafts: special deadline handling triggered")
         }
         
         let bannedDriverIDs = try await sql.raw("""

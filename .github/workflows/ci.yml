@@ -36,6 +36,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Gitleaks
+        run: |
+          set -euo pipefail
+          TMPDIR=$(mktemp -d)
+          TAG="v8.30.0"
+          ASSET="gitleaks_8.30.0_linux_x64.tar.gz"
+          URL="https://github.com/gitleaks/gitleaks/releases/download/${TAG}/${ASSET}"
+          curl -L "$URL" -o "$TMPDIR/gitleaks.tar.gz"
+          tar -xzf "$TMPDIR/gitleaks.tar.gz" -C "$TMPDIR"
+          "$TMPDIR/gitleaks" detect -s . -v --config .gitleaks.toml
+
       - name: Setup Swift
         uses: swift-actions/setup-swift@v3
         with:
@@ -53,4 +64,3 @@ jobs:
 
       - name: Test
         run: swift test
-

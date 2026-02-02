@@ -2,6 +2,7 @@ import NIOSSL
 import NIOCore
 import Fluent
 import FluentPostgresDriver
+import PostgresNIO
 import Vapor
 import JWT
 
@@ -10,8 +11,17 @@ import JWT
 public func configure(_ app: Application) async throws {
     app.http.server.configuration.hostname = "0.0.0.0"
     app.http.server.configuration.port = 3000
-    app.jwt.signers.use(.hs256(key: Environment.get("JWT_SECRET")!))
-    app.jwtExpiration = Double(Environment.get("JWT_EXPIRES_IN_SECONDS") ?? "604800")!
+    guard let jwtSecret = Environment.get("JWT_SECRET"), !jwtSecret.isEmpty else {
+        throw Abort(.internalServerError, reason: "JWT_SECRET is required.")
+    }
+    app.jwt.signers.use(.hs256(key: jwtSecret))
+    if let expires = Environment.get("JWT_EXPIRES_IN_SECONDS"),
+       let value = Double(expires),
+       value > 0 {
+        app.jwtExpiration = value
+    } else {
+        app.jwtExpiration = 604800
+    }
     app.googleClientID = Environment.get("GOOGLE_CLIENT_ID")
 
     // uncomment to serve files from /Public folder
@@ -28,16 +38,17 @@ public func configure(_ app: Application) async throws {
                      "Refusing to run tests with non-test DATABASE_NAME: \(dbName)")
     }
 
-    var tls = TLSConfiguration.makeClientConfiguration()
-    tls.certificateVerification = .none
-
+    let tlsMode = (Environment.get("DATABASE_TLS_MODE")
+        ?? (app.environment == .production ? "require" : "disable"))
+        .lowercased()
+    let tls = try makePostgresTLS(mode: tlsMode)
     let postgresConfig = SQLPostgresConfiguration(
         hostname: hostname,
         port: port,
         username: username,
         password: password,
         database: dbName,
-        tls: .prefer(try .init(configuration: tls))
+        tls: tls
     )
 
     app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
@@ -96,6 +107,27 @@ public func configure(_ app: Application) async throws {
 
     // register routes
     try routes(app)
+}
+
+private func makePostgresTLS(mode: String) throws -> PostgresConnection.Configuration.TLS {
+    switch mode {
+    case "disable":
+        return .disable
+    case "prefer":
+        return try .prefer(makePostgresTLSContext())
+    case "require":
+        return try .require(makePostgresTLSContext())
+    default:
+        throw Abort(.internalServerError, reason: "Invalid DATABASE_TLS_MODE: \(mode). Use disable, prefer, or require.")
+    }
+}
+
+private func makePostgresTLSContext() throws -> NIOSSLContext {
+    var tls = TLSConfiguration.makeClientConfiguration()
+    if let caFile = Environment.get("DATABASE_TLS_CA_FILE"), !caFile.isEmpty {
+        tls.trustRoots = .file(caFile)
+    }
+    return try NIOSSLContext(configuration: tls)
 }
 
 

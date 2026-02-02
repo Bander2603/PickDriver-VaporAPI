@@ -7,6 +7,9 @@ Este documento resume las reglas reales implementadas en la API para ligas, draf
 - Todas las rutas de ligas/draft/picks requieren JWT (Authorization: Bearer).
 - Las validaciones se aplican en runtime; no hay reglas adicionales fuera del codigo.
 
+## Aviso de marcas
+Este proyecto es independiente y no esta afiliado ni respaldado por Formula 1, la FIA ni entidades relacionadas. No se usan logos ni assets oficiales. “Formula 1”, “F1” y marcas relacionadas pertenecen a sus respectivos propietarios y se mencionan solo con fines descriptivos.
+
 ## Ligas
 ### Creacion
 - Requiere temporada activa (season.active = true). Si no, devuelve 400.
