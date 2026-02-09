@@ -1,85 +1,119 @@
-# PickDriver API (Vapor) - Documentacion para cliente web (.NET/Blazor)
+# PickDriver API (Vapor) - Web Client Documentation (.NET/Blazor)
 
 ## Base URL
-- Produccion: https://api.example.com
-- Prefijo: /api
+- Production: https://api.example.com
+- Prefix: /api
 - Content-Type: application/json
-- Fechas: ISO 8601 (UTC)
-- JSON keys: camelCase por defecto (nombres Swift). Algunos DTOs y query params usan snake_case; ver endpoints/modelos.
+- Dates: ISO 8601 (UTC)
+- JSON keys: camelCase by default (Swift naming). Some DTOs and query params use snake_case; see endpoint/model details.
 
-## Aviso de marcas
-Este proyecto es independiente y no esta afiliado ni respaldado por Formula 1, la FIA ni entidades relacionadas. No se usan logos ni assets oficiales. “Formula 1”, “F1” y marcas relacionadas pertenecen a sus respectivos propietarios y se mencionan solo con fines descriptivos.
+## Trademark Notice
+This project is independent and is not affiliated with or endorsed by Formula 1, the FIA, or related entities. No official logos or brand assets are used. “Formula 1”, “F1”, and related marks belong to their respective owners and are referenced for descriptive purposes only.
 
-## Autenticacion
+## Authentication
 - JWT HS256
 - Header: Authorization: Bearer <token>
-- Expiracion: JWT_EXPIRES_IN_SECONDS (default 604800)
+- Expiration: JWT_EXPIRES_IN_SECONDS (default 604800)
 
-## Errores
-- Formato (Vapor): { "error": true, "reason": "..." }
-- Codigos frecuentes: 400, 401, 403, 404, 409, 500
+## Errors
+- Vapor error format: { "error": true, "reason": "..." }
+- Common status codes: 400, 401, 403, 404, 409, 500
 
-## Headers y ejemplo rapido
-- Authorization: Bearer <token> (solo rutas protegidas)
+## Headers and quick example
+- Authorization: Bearer <token> (protected routes only)
 - Content-Type: application/json
+- X-Internal-Token: <token> (internal routes under `/api/internal/*` only)
 
-Ejemplo:
+Example:
 ```bash
 curl -H "Authorization: Bearer <token>" \
   https://api.example.com/api/leagues/my
 ```
 
-## Flujo de autenticacion recomendado
-1) POST /api/auth/register (requiere inviteCode)
-2) POST /api/auth/login -> token JWT
-3) Enviar token en Authorization para el resto de endpoints protegidos
+## Recommended authentication flow
+1) POST /api/auth/register (requires inviteCode)
+2) POST /api/auth/login -> JWT token
+3) Send token in Authorization for all remaining protected endpoints
 
-Alternativa:
-- POST /api/auth/google (login/registro con Google; no requiere inviteCode)
+Alternative:
+- POST /api/auth/google (Google login/registration; no inviteCode required)
 
-Notas:
-- No hay refresh token; cuando expira el JWT, se re-login.
+Notes:
+- No refresh token is implemented; once JWT expires, user must log in again.
 
-## Validaciones y reglas de negocio clave
+## Key validations and business rules
 Auth:
-- username: 3-20 caracteres; solo letras/numeros/._-
-- email: max 100, validacion por regex, se normaliza a lowercase
-- password: minimo 8 caracteres
-- update password: no puede ser igual a la actual
-- register con email/password requiere inviteCode (codigo de invitacion)
-- si INVITE_CODE esta configurado en el backend, solo ese codigo es valido
-- si INVITE_CODE no existe, se validan codigos en tabla `invite_codes` (no usados)
-- Google auth: requiere GOOGLE_CLIENT_ID en el backend
+- username: 3-20 chars; letters/numbers/._- only
+- email: max 100, regex-validated, normalized to lowercase
+- password: minimum 8 chars
+- update password: cannot be equal to current password
+- email/password registration requires inviteCode
+- if INVITE_CODE is configured in backend, only that value is accepted
+- if INVITE_CODE is not configured, codes are validated against `invite_codes` table (unused codes)
+- Google auth requires GOOGLE_CLIENT_ID in backend
 
-Ligas y equipos:
-- Crear liga requiere temporada activa.
-- Maximo 3 ligas creadas por usuario (status "pending" o "active"). Ligas completadas o eliminadas no cuentan.
-- Como miembro, un jugador puede unirse a todas las ligas que desee.
-- Unirse solo si la liga esta en status "pending" y no supera max_players.
-- assign-pick-order y start-draft: solo owner.
-- Equipos solo si la liga esta "pending" y teams_enabled = true.
-- La liga debe estar completa (memberCount == max_players) para crear/editar/borrar equipos.
-- Tamano minimo de equipo: 2; no permite usuarios duplicados ni en multiples equipos.
-- Maximo de equipos: limitado por cantidad de jugadores y equipos F1 de la temporada.
+Leagues and teams:
+- League creation requires an active season.
+- Maximum 3 leagues created per user (status "pending" or "active"). Completed/deleted leagues do not count.
+- As a member, a player can join any number of leagues.
+- Joining allowed only if league status is "pending" and member count does not exceed max_players.
+- assign-pick-order and start-draft are owner-only.
+- Teams are allowed only when league is "pending" and teams_enabled = true.
+- League must be full (memberCount == max_players) to create/update/delete teams.
+- Minimum team size: 2; duplicate users and multi-team assignments are not allowed.
+- Team count is limited by player count and season F1 teams count.
 
 Draft:
-- start-draft crea drafts para carreras futuras desde initial_race_round.
-- pickOrder incluye mirror picks si mirror_picks_enabled = true.
+- start-draft creates drafts for upcoming races from initial_race_round.
+- pickOrder includes mirrored picks if mirror_picks_enabled = true.
 - Deadlines: firstHalfDeadline = fp1 - 36h; secondHalfDeadline = fp1.
-- No se permite pick/ban si la carrera ya comenzo (raceTime en pasado).
-- Pick: solo el usuario del turno; en ligas con equipos, en la ultima hora antes de fp1 un companero puede pickear por el turno actual.
-- Ban: solo si bans_enabled = true; solo se puede banear el pick inmediatamente anterior.
-- No se puede banear al ultimo jugador del orden (salvo que sea tambien el primero).
-- Bans restantes: 2 por usuario (sin equipos) o 3 por equipo (si teams_enabled).
-- Restriccion por carrera: cada usuario/equipo solo puede usar 1 ban por carrera; en ligas sin equipos, un jugador solo puede ser baneado una vez por carrera.
-- Autopick: si hay lista y vence el turno, se intenta pick automatico.
+- pick/ban is blocked once race has started (raceTime in the past).
+- Pick: only current turn user; with teams enabled, in the last hour before fp1 a teammate can pick for current turn.
+- Ban: only if bans_enabled = true; only the immediate previous pick can be banned.
+- Last player in order cannot be banned (unless also first).
+- Remaining bans: 2 per user (no teams) or 3 per team (teams enabled).
+- Per-race limit: each user/team can use 1 ban per race; in no-team leagues, a player can only be banned once per race.
+- Autopick: if list exists and turn expires, automatic pick is attempted.
 
-Notificaciones:
-- GET /api/notifications: limit default 50, max 100, unread_only default false.
-- Registrar device actualiza el token si ya existe.
-- Unregister marca el token como inactivo.
+Notifications:
+- GET /api/notifications: default limit 50, max 100, unread_only default false.
+- Register device updates token if it already exists.
+- Unregister marks token as inactive.
 
 ## Endpoints
+
+### Health (public)
+- GET /api/health/live
+  - Res: `{ "status": "ok", "service": "pickdriver-vapor-api", "version": String, "uptimeSeconds": Int, "timestamp": Date }`
+- GET /api/health/ready
+  - Res 200: `{ "status": "ok", "timestamp": Date, "checks": [{ "name": "database", "status": "ok", "latencyMs": Double, "reason": null }] }`
+  - Res 503: `{ "status": "fail", "timestamp": Date, "checks": [{ "name": "database", "status": "fail", "latencyMs": null, "reason": String }] }`
+- GET /api/health/ping
+  - Res: `{ "status": "ok", "serverTime": Date, "uptimeSeconds": Int, "dbStatus": "ok"|"fail", "dbLatencyMs": Double? }`
+- GET /api/health/dependencies
+  - Res 200/503: `{ "status": "ok"|"fail", "timestamp": Date, "maintenanceMode": Bool, "dependencies": [{ "name": String, "status": "ok"|"warn"|"fail"|"skip", "latencyMs": Double?, "details": String }] }`
+
+### Internal system (internal token)
+- GET /api/internal/system/info
+  - Required header: `X-Internal-Token`
+  - Res: `{ "status": "ok", "service": "pickdriver-vapor-api", "version": String, "environment": String, "timestamp": Date, "uptimeSeconds": Int, "recentMigrations": [{ "name": String, "batch": Int, "createdAt": Date? }] }`
+- GET /api/internal/system/smoke
+  - Required header: `X-Internal-Token`
+  - Res 200: `{ "status": "ok", "timestamp": Date, "checks": [{ "name": String, "status": "ok", "details": String }] }`
+  - Res 503: `{ "status": "fail", "timestamp": Date, "checks": [{ "name": String, "status": "fail"|"ok", "details": String }] }`
+- POST /api/internal/system/maintenance/enable
+  - Required header: `X-Internal-Token`
+  - Req (optional): `{ "source": "vault-worker", "reason": "restore drill" }`
+  - Res: `{ "status": "ok", "maintenanceMode": true, "changed": Bool, "eventType": String, "auditLogged": Bool, "timestamp": Date }`
+- POST /api/internal/system/maintenance/disable
+  - Required header: `X-Internal-Token`
+  - Req (optional): `{ "source": "vault-worker", "reason": "restore finished" }`
+  - Res: `{ "status": "ok", "maintenanceMode": false, "changed": Bool, "eventType": String, "auditLogged": Bool, "timestamp": Date }`
+
+Maintenance notes:
+- When `maintenanceMode` is enabled, API returns `503` for `/api/*` routes except `/api/health/*` and `/api/internal/*`.
+- Every maintenance toggle is audited in `ops_audit_events`.
+- If auditing fails (for example, pending migration for `ops_audit_events`), toggle still returns `200` with `auditLogged=false`.
 
 ### Auth
 - POST /api/auth/register
@@ -91,43 +125,43 @@ Notificaciones:
 - POST /api/auth/google
   - Req: { "idToken": "...", "inviteCode": "INVITE"? }
   - Res: { "user": UserPublic, "token": "..." }
-  - Nota: inviteCode es opcional (Google no requiere invitacion).
+  - Note: inviteCode is optional (Google flow does not require invitation).
 - GET /api/auth/profile (auth)
   - Res: UserPublic
 - PUT /api/auth/password (auth)
   - Req: { "currentPassword": "...", "newPassword": "..." }
   - Res: 200 OK
 - PUT /api/auth/username (auth)
-  - Req: { "username": "nuevo_nombre" }
+  - Req: { "username": "new_name" }
   - Res: UserPublic
 
-### Races (publico)
+### Races (public)
 - GET /api/races
-  - Res: Race[] (solo temporada activa)
+  - Res: Race[] (active season only)
 - GET /api/races/upcoming
-  - Res: Race[] (solo temporada activa)
+  - Res: Race[] (active season only)
 - GET /api/races/current
-  - Res: Race (solo temporada activa)
+  - Res: Race (active season only)
 - GET /api/races/:raceID
   - Res: Race
 
-### Drivers (publico)
+### Drivers (public)
 - GET /api/drivers
-  - Res: Driver[] (solo temporada activa)
+  - Res: Driver[] (active season only)
 
-### F1 Teams (publico)
+### F1 Teams (public)
 - GET /api/f1/teams
-  - Res: F1Team[] (solo temporada activa)
+  - Res: F1Team[] (active season only)
 
-### Standings F1 (publico)
+### F1 Standings (public)
 - GET /api/standings/f1/drivers
-  - Res: DriverStanding[] (solo temporada activa; incluye 0 puntos si no hay resultados)
+  - Res: DriverStanding[] (active season only; includes zero points if no results)
 - GET /api/standings/f1/teams
-  - Res: TeamStanding[] (solo temporada activa; incluye 0 puntos si no hay resultados)
+  - Res: TeamStanding[] (active season only; includes zero points if no results)
 
 ### Leagues (auth)
 - GET /api/leagues/my
-  - Res: LeaguePublic[] (solo temporada activa)
+  - Res: LeaguePublic[] (active season only)
 - POST /api/leagues/create
   - Req: { "name": "...", "maxPlayers": 8, "teamsEnabled": true, "bansEnabled": true, "mirrorEnabled": true }
   - Res: LeaguePublic
@@ -136,11 +170,11 @@ Notificaciones:
   - Res: LeaguePublic
 - DELETE /api/leagues/:leagueID
   - Res: 200 OK
-  - Nota: solo owner y solo si status = "pending".
+  - Note: owner only and only if status = "pending".
 - GET /api/leagues/:leagueID/members
   - Res: UserPublic[]
 - GET /api/leagues/:leagueID/teams
-  - Res: LeagueTeam[] (incluye members)
+  - Res: LeagueTeam[] (includes members)
 - POST /api/leagues/:leagueID/assign-pick-order
   - Res: 200 OK
 - POST /api/leagues/:leagueID/start-draft
@@ -148,7 +182,7 @@ Notificaciones:
 - GET /api/leagues/:leagueID/draft/:raceID/pick-order
   - Res: [Int] (user IDs)
 - GET /api/leagues/:leagueID/draft/:raceID
-  - Res: RaceDraft (incluye pickedDriverIDs, bannedDriverIDs y bannedDriverIDsByPickIndex)
+  - Res: RaceDraft (includes pickedDriverIDs, bannedDriverIDs and bannedDriverIDsByPickIndex)
 - GET /api/leagues/:leagueID/draft/:raceID/deadlines
   - Res: DraftDeadline
 - GET /api/leagues/:leagueID/autopick
@@ -202,7 +236,7 @@ Notificaciones:
 - POST /api/races/:raceID/results/publish
   - Res: { "createdNotifications": Int }
 
-## Modelos (resumen)
+## Models (summary)
 
 UserPublic:
 { "id": Int, "username": String, "email": String, "emailVerified": Bool }
@@ -227,9 +261,9 @@ F1Team:
 
 RaceDraft:
 { "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String, "pickedDriverIDs": [Int?], "bannedDriverIDs": [Int], "bannedDriverIDsByPickIndex": [Int?] }
-  - pickedDriverIDs esta alineado con pickOrder (mismo largo), con null si no hay pick vigente o fue baneado.
-  - bannedDriverIDs contiene todos los driver_id con is_banned = true para el draft.
-  - bannedDriverIDsByPickIndex esta alineado con pickOrder (mismo largo); contiene el ultimo driver baneado para esa posicion o null si no hay baneos.
+  - pickedDriverIDs is aligned with pickOrder (same length), with null where no active pick exists or pick was banned.
+  - bannedDriverIDs includes all driver_id values with is_banned = true in the draft.
+  - bannedDriverIDsByPickIndex is aligned with pickOrder (same length); contains the last banned driver for that slot or null if none.
 
 DraftDeadline:
 { "raceID": Int, "leagueID": Int, "firstHalfDeadline": Date, "secondHalfDeadline": Date }
@@ -264,9 +298,9 @@ PushNotificationPublic:
 NotificationPayload:
 { "leagueID": Int?, "raceID": Int?, "draftID": Int?, "pickIndex": Int? }
 
-## CORS, dominio y Cloudflare
-- Si el cliente vive en https://pickdriver.cc y la API en otro origen (ej. https://api.pickdriver.cc), el navegador requiere CORS.
-- Actualmente no hay CORSMiddleware configurado.
-- Sugerencia: habilitar CORS para https://pickdriver.cc (+ www y staging si aplica) y permitir headers Authorization y Content-Type.
-- Si se hace proxy de la API bajo el mismo origen (pickdriver.cc/api), no hace falta CORS.
-- Cloudflare DNS/proxy no rompe auth, pero evitar cachear rutas autenticadas y asegurar que Authorization pase intacto.
+## CORS, domain, and Cloudflare
+- If client runs on https://pickdriver.cc and API is on another origin (for example, https://api.pickdriver.cc), browser requires CORS.
+- CORSMiddleware is currently not configured.
+- Recommendation: allow CORS for https://pickdriver.cc (+ www and staging if needed) and allow Authorization and Content-Type headers.
+- If API is proxied under same origin (pickdriver.cc/api), CORS is not needed.
+- Cloudflare DNS/proxy does not break auth by itself, but avoid caching authenticated routes and ensure Authorization headers are forwarded unchanged.

@@ -11,6 +11,27 @@ import JWT
 public func configure(_ app: Application) async throws {
     app.http.server.configuration.hostname = "0.0.0.0"
     app.http.server.configuration.port = 3000
+    app.startedAt = Date()
+    app.appVersion = Environment.get("APP_VERSION")?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "dev"
+    app.enableInternalRoutes = envBool("ENABLE_INTERNAL_ROUTES", default: true)
+    app.maintenanceMode = envBool("MAINTENANCE_MODE", default: false)
+
+    if app.enableInternalRoutes {
+        let internalToken = Environment.get("INTERNAL_SERVICE_TOKEN")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nonEmpty
+        if let internalToken {
+            app.internalServiceToken = internalToken
+        } else if app.environment == .testing {
+            app.internalServiceToken = "test-internal-token"
+        } else {
+            throw Abort(
+                .internalServerError,
+                reason: "INTERNAL_SERVICE_TOKEN is required when ENABLE_INTERNAL_ROUTES=true."
+            )
+        }
+    }
+
     guard let jwtSecret = Environment.get("JWT_SECRET"), !jwtSecret.isEmpty else {
         throw Abort(.internalServerError, reason: "JWT_SECRET is required.")
     }
@@ -86,6 +107,7 @@ public func configure(_ app: Application) async throws {
     // Results + maintenance
     app.migrations.add(CreateRaceResults())
     app.migrations.add(CreateMaintenanceStats())
+    app.migrations.add(CreateOpsAuditEvents())
 
     // Notifications
     app.migrations.add(CreatePushTokens())
@@ -107,6 +129,22 @@ public func configure(_ app: Application) async throws {
 
     // register routes
     try routes(app)
+}
+
+private func envBool(_ key: String, default defaultValue: Bool) -> Bool {
+    guard let raw = Environment.get(key)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+          !raw.isEmpty else {
+        return defaultValue
+    }
+
+    switch raw {
+    case "1", "true", "yes", "on":
+        return true
+    case "0", "false", "no", "off":
+        return false
+    default:
+        return defaultValue
+    }
 }
 
 private func makePostgresTLS(mode: String) throws -> PostgresConnection.Configuration.TLS {
@@ -132,6 +170,51 @@ private func makePostgresTLSContext() throws -> NIOSSLContext {
 
 
 extension Application {
+    private struct StartedAtKey: StorageKey {
+        typealias Value = Date
+    }
+
+    var startedAt: Date {
+        get { self.storage[StartedAtKey.self] ?? Date() }
+        set { self.storage[StartedAtKey.self] = newValue }
+    }
+
+    private struct AppVersionKey: StorageKey {
+        typealias Value = String
+    }
+
+    var appVersion: String {
+        get { self.storage[AppVersionKey.self] ?? "dev" }
+        set { self.storage[AppVersionKey.self] = newValue }
+    }
+
+    private struct EnableInternalRoutesKey: StorageKey {
+        typealias Value = Bool
+    }
+
+    var enableInternalRoutes: Bool {
+        get { self.storage[EnableInternalRoutesKey.self] ?? true }
+        set { self.storage[EnableInternalRoutesKey.self] = newValue }
+    }
+
+    private struct InternalServiceTokenKey: StorageKey {
+        typealias Value = String
+    }
+
+    var internalServiceToken: String? {
+        get { self.storage[InternalServiceTokenKey.self] }
+        set { self.storage[InternalServiceTokenKey.self] = newValue }
+    }
+
+    private struct MaintenanceModeKey: StorageKey {
+        typealias Value = Bool
+    }
+
+    var maintenanceMode: Bool {
+        get { self.storage[MaintenanceModeKey.self] ?? false }
+        set { self.storage[MaintenanceModeKey.self] = newValue }
+    }
+
     private struct JWTExpirationKey: StorageKey {
         typealias Value = Double
     }
@@ -193,5 +276,11 @@ extension Application {
     var draftDeadlineTask: RepeatedTask? {
         get { self.storage[DraftDeadlineTaskKey.self] }
         set { self.storage[DraftDeadlineTaskKey.self] = newValue }
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        self.isEmpty ? nil : self
     }
 }

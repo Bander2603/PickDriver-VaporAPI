@@ -6,7 +6,8 @@ func routes(_ app: Application) throws {
     try app.register(collection: AuthController())
     
     // 🔐 API grouping
-    let api = app.grouped("api")
+    let api = app.grouped("api").grouped(MaintenanceModeMiddleware())
+    try api.register(collection: HealthController())
 
     // 🔐 Public controllers under /api/*
     try api.register(collection: RaceController())
@@ -23,6 +24,11 @@ func routes(_ app: Application) throws {
     let protected = api.grouped(UserAuthenticator())
     try protected.grouped("leagues").register(collection: LeagueController())
     try protected.grouped("players").register(collection: PlayerController())
+
+    if app.enableInternalRoutes {
+        let internalProtected = api.grouped("internal").grouped(InternalServiceAuthenticator())
+        try internalProtected.grouped("system").register(collection: InternalSystemController())
+    }
 
     // 🧪 Simple test endpoints (non-API path)
     if app.environment != .production {
