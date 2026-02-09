@@ -1,136 +1,136 @@
-# Logica de negocio - PickDriver API (Vapor)
+# Business Logic - PickDriver API (Vapor)
 
-Este documento resume las reglas reales implementadas en la API para ligas, draft, picks, equipos y standings.
+This document summarizes the actual rules implemented in the API for leagues, draft flow, picks, teams, and standings.
 
-## Convenciones generales
-- JSON: camelCase por defecto; algunos endpoints usan snake_case en payloads y query params.
-- Todas las rutas de ligas/draft/picks requieren JWT (Authorization: Bearer).
-- Las validaciones se aplican en runtime; no hay reglas adicionales fuera del codigo.
+## General conventions
+- JSON: camelCase by default; some endpoints use snake_case in payloads and query params.
+- All league/draft/pick routes require JWT (Authorization: Bearer).
+- Validations are enforced at runtime; there are no hidden rules outside the codebase.
 
-## Aviso de marcas
-Este proyecto es independiente y no esta afiliado ni respaldado por Formula 1, la FIA ni entidades relacionadas. No se usan logos ni assets oficiales. “Formula 1”, “F1” y marcas relacionadas pertenecen a sus respectivos propietarios y se mencionan solo con fines descriptivos.
+## Trademark notice
+This project is independent and is not affiliated with or endorsed by Formula 1, the FIA, or related entities. No official logos or brand assets are used. “Formula 1”, “F1”, and related marks belong to their respective owners and are referenced for descriptive purposes only.
 
-## Ligas
-### Creacion
-- Requiere temporada activa (season.active = true). Si no, devuelve 400.
-- La liga se crea con status "pending".
-- El creador queda como owner y tambien se agrega como miembro.
-- `teamsEnabled`, `bansEnabled`, `mirrorEnabled` se aceptan sin validaciones adicionales al crear.
-- `maxPlayers` define el limite de miembros.
+## Leagues
+### Creation
+- Requires an active season (`season.active = true`). Otherwise returns 400.
+- League is created with status `pending`.
+- Creator becomes owner and is also added as a member.
+- `teamsEnabled`, `bansEnabled`, and `mirrorEnabled` are accepted without extra validation at creation time.
+- `maxPlayers` sets the member limit.
 
-### Unirse a una liga
-- Solo se puede unir si la liga esta en "pending".
-- No permite unirse si ya es miembro.
-- No permite unirse si la liga esta llena (memberCount >= maxPlayers).
+### Joining a league
+- Allowed only while league status is `pending`.
+- Joining is blocked if user is already a member.
+- Joining is blocked when league is full (`memberCount >= maxPlayers`).
 
-### Permisos
-- `owner` (creador) es el unico que puede:
-  - asignar orden de picks (`assign-pick-order`)
-  - iniciar el draft (`start-draft`)
-  - eliminar la liga (solo si esta "pending")
-- Varias operaciones requieren ser miembro de la liga (ver endpoints protegidos).
+### Permissions
+- `owner` (creator) is the only role allowed to:
+  - assign pick order (`assign-pick-order`)
+  - start draft (`start-draft`)
+  - delete league (only while `pending`)
+- Several operations also require the user to be a league member (see protected endpoints).
 
-### Eliminar liga
-- Solo owner.
-- Solo si la liga esta en "pending".
-- La eliminacion hace cascade a miembros, equipos, drafts, picks y autopicks por FK.
+### Delete league
+- Owner only.
+- Only while league is `pending`.
+- Delete cascades through members, teams, drafts, picks, and autopicks via FK rules.
 
-## Equipos (teams)
-### Reglas de habilitacion
-- Solo aplican si `teamsEnabled = true`.
-- La liga debe estar en "pending".
-- La liga debe estar completa (memberCount == maxPlayers).
+## Teams
+### Enablement rules
+- Applies only when `teamsEnabled = true`.
+- League must be in `pending`.
+- League must be full (`memberCount == maxPlayers`).
 
-### Reglas de tamanos
-- Tamano minimo por equipo: 2.
-- Maximo de equipos = min(totalPlayers / 2, cantidad de equipos F1 en la temporada).
-- La distribucion debe ser factible y balanceada:
-  - cada equipo debe quedar entre floor(totalPlayers / k) y ceil(totalPlayers / k)
-  - no se permiten equipos por debajo del minimo
+### Team-size rules
+- Minimum team size: 2.
+- Maximum team count = `min(totalPlayers / 2, numberOfSeasonF1Teams)`.
+- Distribution must be feasible and balanced:
+  - each team size must be between `floor(totalPlayers / k)` and `ceil(totalPlayers / k)`
+  - teams below minimum size are not allowed
 
-### Reglas de membresia
-- No se permiten usuarios duplicados dentro de un mismo equipo.
-- Un usuario no puede estar en multiples equipos.
-- Solo miembros de la liga pueden estar en equipos.
+### Membership rules
+- Duplicate users inside the same team are not allowed.
+- A user cannot be assigned to multiple teams.
+- Only league members can be assigned to teams.
 
 ## Drafts
-### Activacion (start-draft)
-- Solo owner.
-- Liga debe estar en "pending".
-- La liga debe estar completa (members == maxPlayers).
-- Si `teamsEnabled = true`, todos los jugadores deben estar asignados a equipos.
+### Activation (start-draft)
+- Owner only.
+- League must be `pending`.
+- League must be full (`members == maxPlayers`).
+- If `teamsEnabled = true`, all players must be assigned to teams.
 
-### Orden de picks
-- Si existe `pickOrder` asignado para todos los miembros, se respeta.
-- Si no, se calcula un orden aleatorio:
-  - sin equipos: shuffle directo
-  - con equipos: shuffle por equipo y round-robin entre equipos
-- Por cada carrera futura desde `initialRaceRound`, se rota el orden.
-- Si `mirrorEnabled = true`, el orden se duplica en espejo (rotated + reversed).
+### Pick order
+- If full `pickOrder` was assigned for all members, it is used as-is.
+- Otherwise a random order is computed:
+  - without teams: direct shuffle
+  - with teams: team shuffle + round-robin between teams
+- For each upcoming race from `initialRaceRound`, order is rotated.
+- If `mirrorEnabled = true`, order is duplicated with mirror logic (`rotated + reversed`).
 
 ### Deadlines
 - `firstHalfDeadline = fp1Time - 36h`
 - `secondHalfDeadline = fp1Time`
-- Si no hay `fp1Time` o no existe draft para la carrera, devuelve 404.
+- If `fp1Time` is missing or no draft exists for race, returns 404.
 
 ## Autopick
-- Cada usuario puede guardar una lista ordenada de drivers (`driverIDs`) por liga.
-- Se eliminan duplicados manteniendo orden.
-- La lista debe coincidir con drivers de la temporada de la liga.
-- Si se envia lista vacia, se borra la configuracion.
-- Cuando expira un turno, se intenta autopick con el primer driver disponible:
-  - no baneado por el usuario
-  - no pickeado por otro jugador
-- Si no hay autopick valido, el turno se considera expirado y se avanza igual.
+- Each user can save an ordered driver list (`driverIDs`) per league.
+- Duplicates are removed while preserving order.
+- List must match league season drivers.
+- Empty list removes autopick configuration.
+- When turn expires, autopick tries first available driver:
+  - not banned by that user
+  - not already picked by another player
+- If no valid autopick exists, turn expires and flow advances anyway.
 
 ## Picks
-### Reglas de acceso
-- Solo el usuario del turno puede pickear.
-- Si `teamsEnabled = true` y falta menos de 1h para fp1, un companero puede pickear por el turno actual.
+### Access rules
+- Only current turn user can pick.
+- If `teamsEnabled = true` and less than 1h remains before fp1, a teammate can pick for the current turn.
 
-### Validaciones
-- No se permite pick/ban si la carrera ya comenzo o esta completada:
-  - `race.completed == true` o `race.raceTime < now`
-- El driver debe existir y pertenecer a la temporada de la carrera.
-- No se permite pickear un driver ya pickeado (global en el draft).
-- No se permite pickear un driver que el usuario tenga baneado.
-- Solo un pick por usuario y por "mirror slot" (`is_mirror_pick`).
+### Validations
+- pick/ban is blocked if race already started or completed:
+  - `race.completed == true` or `race.raceTime < now`
+- Driver must exist and belong to race season.
+- Picking an already-picked driver is blocked (global within draft).
+- Picking a driver banned by that user is blocked.
+- Only one pick per user and per mirror slot (`is_mirror_pick`).
 
-### Efectos
-- Inserta pick y avanza `currentPickIndex`.
-- Notifica al siguiente jugador cuando corresponde.
+### Effects
+- Inserts pick and advances `currentPickIndex`.
+- Notifies next player when applicable.
 
 ## Bans
-### Reglas de acceso
-- Solo si `bansEnabled = true`.
-- Solo se puede banear el pick inmediatamente anterior.
-- No se puede banear al ultimo jugador del orden (salvo que tambien sea el primero).
-- Ligas sin equipos:
-  - cada usuario solo puede banear una vez por carrera.
-  - un jugador solo puede ser baneado una vez por carrera.
-- Ligas con equipos:
-  - cada equipo solo puede banear una vez por carrera.
-- Permisos:
-  - sin equipos: solo el usuario del turno
-  - con equipos: el usuario del turno o un companero
+### Access rules
+- Only if `bansEnabled = true`.
+- Only immediate previous pick can be banned.
+- Last player in order cannot be banned (unless also first).
+- No-team leagues:
+  - each user can ban only once per race
+  - each player can only be banned once per race
+- Team leagues:
+  - each team can ban only once per race
+- Permissions:
+  - no teams: current turn user only
+  - teams: current turn user or teammate
 
-### Cantidad de bans
-- Sin equipos: 2 bans por usuario.
-- Con equipos: 3 bans por equipo.
-- Restriccion por carrera: cada usuario/equipo solo puede usar 1 ban por carrera; en ligas sin equipos, un jugador solo puede ser baneado una vez por carrera.
+### Ban count
+- No teams: 2 bans per user.
+- Teams enabled: 3 bans per team.
+- Per-race restriction: each user/team can use one ban per race; in no-team leagues, a player can only be banned once per race.
 
-### Efectos
-- Marca el pick como baneado (`is_banned = true`) y guarda `banned_by`.
-- Retrocede `currentPickIndex` al pick anterior para que el usuario re-pickee.
-- Notifica al siguiente jugador despues del cambio.
+### Effects
+- Marks pick as banned (`is_banned = true`) and stores `banned_by`.
+- Moves `currentPickIndex` back to previous pick so user can re-pick.
+- Notifies next player after state change.
 
-## Standings y puntuacion
-- Solo se consideran picks no baneados.
-- Picks hechos por autopick valen 50% de los puntos del driver.
-- Los standings se calculan sobre carreras completadas.
-- En picks con mirror, el sistema calcula la posicion considerando el orden espejo.
+## Standings and scoring
+- Only non-banned picks are counted.
+- Autopicks are worth 50% of driver points.
+- Standings are computed over completed races.
+- For mirrored picks, position calculation considers mirror order.
 
-## Notificaciones relacionadas al draft
-- Al iniciar draft se notifica al primer usuario del orden.
-- Al completar un pick se notifica al siguiente usuario.
-- Al publicar resultados se generan notificaciones asociadas a la carrera.
+## Draft-related notifications
+- Starting draft notifies first user in order.
+- Completing a pick notifies next user.
+- Publishing results creates race-linked notifications.
