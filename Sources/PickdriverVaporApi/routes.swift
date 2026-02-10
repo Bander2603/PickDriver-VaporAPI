@@ -26,8 +26,11 @@ func routes(_ app: Application) throws {
     try protected.grouped("players").register(collection: PlayerController())
 
     if app.enableInternalRoutes {
-        let internalProtected = api.grouped("internal").grouped(InternalServiceAuthenticator())
+        let internalProtected = api.grouped("internal")
+            .grouped(InternalServiceAuthenticator())
+            .grouped(InternalHTTPSMiddleware())
         try internalProtected.grouped("system").register(collection: InternalSystemController())
+        try internalProtected.grouped("ops").register(collection: InternalOpsController())
     }
 
     // 🧪 Simple test endpoints (non-API path)

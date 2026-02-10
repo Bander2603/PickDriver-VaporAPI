@@ -15,6 +15,7 @@ public func configure(_ app: Application) async throws {
     app.appVersion = Environment.get("APP_VERSION")?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "dev"
     app.enableInternalRoutes = envBool("ENABLE_INTERNAL_ROUTES", default: true)
     app.maintenanceMode = envBool("MAINTENANCE_MODE", default: false)
+    app.internalRoutesRequireHTTPS = envBool("INTERNAL_REQUIRE_HTTPS", default: app.environment == .production)
 
     if app.enableInternalRoutes {
         let internalToken = Environment.get("INTERNAL_SERVICE_TOKEN")?
@@ -73,6 +74,9 @@ public func configure(_ app: Application) async throws {
     )
 
     app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
+    if let drillConfig = try makeDrillPostgresConfiguration(app: app, fallbackTLSMode: tlsMode) {
+        app.databases.use(.postgres(configuration: drillConfig), as: .drill, isDefault: false)
+    }
     
     // Migrations (schema + indexes)
     app.migrations.add(CreatePgTrgmExtension())
@@ -147,6 +151,64 @@ private func envBool(_ key: String, default defaultValue: Bool) -> Bool {
     }
 }
 
+private func envString(_ key: String) -> String? {
+    Environment.get(key)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .nonEmpty
+}
+
+private func makeDrillPostgresConfiguration(
+    app: Application,
+    fallbackTLSMode: String
+) throws -> SQLPostgresConfiguration? {
+    let host = envString("DRILL_DB_HOST")
+    let dbName = envString("DRILL_DB_NAME")
+    let username = envString("DRILL_DB_USER") ?? envString("DRILL_DB_USERNAME")
+    let password = envString("DRILL_DB_PASSWORD")
+    let portRaw = envString("DRILL_DB_PORT")
+    let tlsModeRaw = envString("DRILL_DB_SSLMODE") ?? envString("DRILL_DB_TLS_MODE")
+
+    let hasAnyDrillSetting = [host, dbName, username, password, portRaw, tlsModeRaw].contains { $0 != nil }
+    guard hasAnyDrillSetting else {
+        return nil
+    }
+
+    guard let host, let dbName, let username, let password else {
+        throw Abort(
+            .internalServerError,
+            reason: "Incomplete DRILL_DB_* configuration. Required: DRILL_DB_HOST, DRILL_DB_NAME, DRILL_DB_USER (or DRILL_DB_USERNAME), DRILL_DB_PASSWORD."
+        )
+    }
+
+    if app.environment == .testing {
+        precondition(
+            dbName.lowercased().contains("test"),
+            "Refusing to run tests with non-test DRILL_DB_NAME: \(dbName)"
+        )
+    }
+
+    let port: Int
+    if let portRaw {
+        guard let parsedPort = Int(portRaw) else {
+            throw Abort(.internalServerError, reason: "Invalid DRILL_DB_PORT: \(portRaw).")
+        }
+        port = parsedPort
+    } else {
+        port = SQLPostgresConfiguration.ianaPortNumber
+    }
+
+    let tlsMode = (tlsModeRaw ?? fallbackTLSMode).lowercased()
+    let tls = try makePostgresTLS(mode: tlsMode)
+    return SQLPostgresConfiguration(
+        hostname: host,
+        port: port,
+        username: username,
+        password: password,
+        database: dbName,
+        tls: tls
+    )
+}
+
 private func makePostgresTLS(mode: String) throws -> PostgresConnection.Configuration.TLS {
     switch mode {
     case "disable":
@@ -166,6 +228,12 @@ private func makePostgresTLSContext() throws -> NIOSSLContext {
         tls.trustRoots = .file(caFile)
     }
     return try NIOSSLContext(configuration: tls)
+}
+
+extension DatabaseID {
+    static var drill: DatabaseID {
+        .init(string: "drill")
+    }
 }
 
 
@@ -213,6 +281,15 @@ extension Application {
     var maintenanceMode: Bool {
         get { self.storage[MaintenanceModeKey.self] ?? false }
         set { self.storage[MaintenanceModeKey.self] = newValue }
+    }
+
+    private struct InternalRoutesRequireHTTPSKey: StorageKey {
+        typealias Value = Bool
+    }
+
+    var internalRoutesRequireHTTPS: Bool {
+        get { self.storage[InternalRoutesRequireHTTPSKey.self] ?? false }
+        set { self.storage[InternalRoutesRequireHTTPSKey.self] = newValue }
     }
 
     private struct JWTExpirationKey: StorageKey {

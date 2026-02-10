@@ -10,5 +10,6 @@ db.sqlite
 .env.*
 !.env.example
 !.env.example.build
+!.env.test.example
 .vscode
 .DS_Store
