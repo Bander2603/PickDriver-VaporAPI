@@ -110,10 +110,29 @@ Notifications:
   - Req (optional): `{ "source": "vault-worker", "reason": "restore finished" }`
   - Res: `{ "status": "ok", "maintenanceMode": false, "changed": Bool, "eventType": String, "auditLogged": Bool, "timestamp": Date }`
 
+### Internal ops (internal token)
+- GET /api/internal/ops/db-info
+  - Required header: `X-Internal-Token`
+  - Query (optional): `target=drill|staging|primary` (defaults to primary DB)
+  - Res: `{ "schemaVersion": String, "lastMigrationAt": Date?, "appliedMigrations": [{ "name": String, "batch": Int, "createdAt": Date? }], "expectedCriticalTables": [String], "criticalTableCounts": { "<table>": Int }? }`
+- POST /api/internal/ops/backup/validate
+  - Required header: `X-Internal-Token`
+  - Req: `{ "target": "drill"|"staging"|"primary", "backupId": String, "checksProfile": "quick"|"full", "source": "vault-worker"?, "reason": String? }`
+  - Res: `{ "success": Bool, "checks": [{ "name": String, "status": "ok"|"warn"|"fail", "details": String, "latencyMs": Double? }], "summary": { "passed": Int, "failed": Int, "warnings": Int }, "validatedAtUtc": Date }`
+
 Maintenance notes:
 - When `maintenanceMode` is enabled, API returns `503` for `/api/*` routes except `/api/health/*` and `/api/internal/*`.
 - Every maintenance toggle is audited in `ops_audit_events`.
 - If auditing fails (for example, pending migration for `ops_audit_events`), toggle still returns `200` with `auditLogged=false`.
+- Internal routes can enforce HTTPS via `INTERNAL_REQUIRE_HTTPS` (default `true` in production).
+- `target=prod|production|main|live` is rejected on internal drill operations.
+- `target=drill` requires dedicated DB settings (`DRILL_DB_*`), otherwise API returns `503`.
+- Drill DB provisioning reference: `Docs/pickdriver-vault-backend.md` (`Drill DB provisioning` section).
+- Backup validation writes drill audit events in `ops_audit_events`:
+  - `drill_started`
+  - `restore_completed`
+  - `functional_validation_completed` or `functional_validation_failed`
+  - `drill_finished`
 
 ### Auth
 - POST /api/auth/register
