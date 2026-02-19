@@ -30,6 +30,9 @@ final class User: Model, @unchecked Sendable, Authenticatable {
     @OptionalField(key: "google_id")
     var googleID: String?
 
+    @OptionalField(key: "apple_id")
+    var appleID: String?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
