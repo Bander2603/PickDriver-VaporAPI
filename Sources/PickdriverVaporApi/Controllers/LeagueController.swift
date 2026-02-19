@@ -8,6 +8,7 @@
 import Vapor
 import Fluent
 import SQLKit
+import PostgresNIO
 
 struct LeagueController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
@@ -60,6 +61,7 @@ struct LeagueController: RouteCollection {
         let user = try req.auth.require(User.self)
         let data = try req.content.decode(CreateLeagueRequest.self)
         let userID = try user.requireID()
+        let activeSeasonID = try await Season.requireActiveID(on: req.db)
 
         let activeLeagueCount = try await League.query(on: req.db)
             .filter(\.$creator.$id == userID)
@@ -72,31 +74,34 @@ struct LeagueController: RouteCollection {
 
         let code = generateUniqueCode()
 
-        guard let season = try await Season.query(on: req.db)
-            .filter(\.$active == true)
-            .first()
-        else {
-            throw Abort(.badRequest, reason: "No active season found.")
+        do {
+            return try await req.db.transaction { tx in
+                let league = League(
+                    name: data.name,
+                    code: code,
+                    status: "pending",
+                    creatorID: userID,
+                    teamsEnabled: data.teamsEnabled,
+                    bansEnabled: data.bansEnabled,
+                    mirrorEnabled: data.mirrorEnabled,
+                    maxPlayers: data.maxPlayers,
+                    seasonID: activeSeasonID
+                )
+
+                try await league.save(on: tx)
+
+                let member = LeagueMember(userID: userID, leagueID: try league.requireID())
+                try await member.save(on: tx)
+
+                return league.convertToPublic()
+            }
+        } catch let psql as PSQLError
+            where psql.serverInfo?[.sqlState] == "23505" {
+            throw Abort(
+                .conflict,
+                reason: "Database sequence mismatch detected. Please run sequence resync for table league_members."
+            )
         }
-
-        let league = League(
-            name: data.name,
-            code: code,
-            status: "pending",
-            creatorID: userID,
-            teamsEnabled: data.teamsEnabled,
-            bansEnabled: data.bansEnabled,
-            mirrorEnabled: data.mirrorEnabled,
-            maxPlayers: data.maxPlayers,
-            seasonID: try season.requireID()
-        )
-
-        try await league.save(on: req.db)
-
-        let member = LeagueMember(userID: try user.requireID(), leagueID: try league.requireID())
-        try await member.save(on: req.db)
-
-        return league.convertToPublic()
     }
 
     func deleteLeague(_ req: Request) async throws -> HTTPStatus {

@@ -44,7 +44,8 @@ See `.env.example` for the full list. Key values:
 - `DATABASE_*` (required)
 - `DATABASE_TLS_MODE` (`disable`, `prefer`, `require`)
   - Default is `require` in production, `disable` otherwise
-- `GOOGLE_CLIENT_ID` (optional)
+- `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_IDS` (optional; for web+iOS use comma-separated `GOOGLE_CLIENT_IDS`)
+- `APPLE_CLIENT_ID` or `APPLE_CLIENT_IDS` (optional; for native app Sign in with Apple)
 - `INVITE_CODE` (optional)
 - `ENABLE_INTERNAL_ROUTES` (optional, default `true`)
 - `INTERNAL_SERVICE_TOKEN` (required only when `ENABLE_INTERNAL_ROUTES=true`)

@@ -44,7 +44,24 @@ public func configure(_ app: Application) async throws {
     } else {
         app.jwtExpiration = 604800
     }
-    app.googleClientID = Environment.get("GOOGLE_CLIENT_ID")
+
+    let googleClientIDs = envList("GOOGLE_CLIENT_IDS")
+    if !googleClientIDs.isEmpty {
+        app.googleClientIDs = googleClientIDs
+    } else if let googleClientID = envString("GOOGLE_CLIENT_ID") {
+        app.googleClientIDs = [googleClientID]
+    } else {
+        app.googleClientIDs = []
+    }
+
+    let appleClientIDs = envList("APPLE_CLIENT_IDS")
+    if !appleClientIDs.isEmpty {
+        app.appleClientIDs = appleClientIDs
+    } else if let appleClientID = envString("APPLE_CLIENT_ID") {
+        app.appleClientIDs = [appleClientID]
+    } else {
+        app.appleClientIDs = []
+    }
 
     // uncomment to serve files from /Public folder
     // app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
@@ -54,7 +71,7 @@ public func configure(_ app: Application) async throws {
     let username = Environment.get("DATABASE_USERNAME") ?? "vapor_username"
     let password = Environment.get("DATABASE_PASSWORD") ?? "vapor_password"
     let dbName = Environment.get("DATABASE_NAME") ?? "vapor_database"
-    
+
     if app.environment == .testing {
         precondition(dbName.lowercased().contains("test"),
                      "Refusing to run tests with non-test DATABASE_NAME: \(dbName)")
@@ -77,7 +94,7 @@ public func configure(_ app: Application) async throws {
     if let drillConfig = try makeDrillPostgresConfiguration(app: app, fallbackTLSMode: tlsMode) {
         app.databases.use(.postgres(configuration: drillConfig), as: .drill, isDefault: false)
     }
-    
+
     // Migrations (schema + indexes)
     app.migrations.add(CreatePgTrgmExtension())
 
@@ -86,6 +103,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateUsers())
     app.migrations.add(AddEmailVerificationToUsers())
     app.migrations.add(AddGoogleIDToUsers())
+    app.migrations.add(AddAppleIDToUsers())
     app.migrations.add(AddInviteCodes())
     app.migrations.add(RemoveFirebaseUIDFromUsers())
 
@@ -155,6 +173,17 @@ private func envString(_ key: String) -> String? {
     Environment.get(key)?
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .nonEmpty
+}
+
+private func envList(_ key: String) -> [String] {
+    guard let raw = Environment.get(key)?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+        return []
+    }
+
+    return raw
+        .split(separator: ",")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
 }
 
 private func makeDrillPostgresConfiguration(
@@ -301,13 +330,32 @@ extension Application {
         set { self.storage[JWTExpirationKey.self] = newValue }
     }
 
-    private struct GoogleClientIDKey: StorageKey {
-        typealias Value = String
+    private struct GoogleClientIDsKey: StorageKey {
+        typealias Value = [String]
+    }
+
+    var googleClientIDs: [String] {
+        get { self.storage[GoogleClientIDsKey.self] ?? [] }
+        set { self.storage[GoogleClientIDsKey.self] = newValue }
     }
 
     var googleClientID: String? {
-        get { self.storage[GoogleClientIDKey.self] }
-        set { self.storage[GoogleClientIDKey.self] = newValue }
+        get { self.googleClientIDs.first }
+        set { self.googleClientIDs = newValue.map { [$0] } ?? [] }
+    }
+
+    private struct AppleClientIDsKey: StorageKey {
+        typealias Value = [String]
+    }
+
+    var appleClientIDs: [String] {
+        get { self.storage[AppleClientIDsKey.self] ?? [] }
+        set { self.storage[AppleClientIDsKey.self] = newValue }
+    }
+
+    var appleClientID: String? {
+        get { self.appleClientIDs.first }
+        set { self.appleClientIDs = newValue.map { [$0] } ?? [] }
     }
 
     private struct EmailVerificationExpirationKey: StorageKey {

@@ -45,6 +45,14 @@ struct GoogleAuthRequest: Content {
     let inviteCode: String?
 }
 
+struct AppleAuthRequest: Content {
+    let idToken: String
+    let email: String?
+    let firstName: String?
+    let lastName: String?
+    let inviteCode: String?
+}
+
 private enum AuthPolicy {
     static let minUsernameLength = 3
     static let maxUsernameLength = 20
@@ -64,6 +72,7 @@ struct AuthController: RouteCollection {
         auth.post("register", use: Self.registerHandler)
         auth.post("login", use: Self.loginHandler)
         auth.post("google", use: Self.googleAuthHandler)
+        auth.post("apple", use: Self.appleAuthHandler)
 
         let protected = auth.grouped(UserAuthenticator())
         protected.get("profile", use: Self.profileHandler)
@@ -133,7 +142,7 @@ struct AuthController: RouteCollection {
         let user = try req.auth.require(User.self)
         return user.convertToPublic()
     }
-    
+
     static func updatePasswordHandler(_ req: Request) async throws -> HTTPStatus {
         let data = try req.content.decode(UpdatePasswordRequest.self)
         let user = try req.auth.require(User.self)
@@ -230,6 +239,71 @@ struct AuthController: RouteCollection {
         return AuthResponse(user: user.convertToPublic(), token: token)
     }
 
+    static func appleAuthHandler(_ req: Request) async throws -> AuthResponse {
+        let data = try req.content.decode(AppleAuthRequest.self)
+        let idToken = data.idToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !idToken.isEmpty else {
+            throw Abort(.badRequest, reason: "idToken is required.")
+        }
+
+        let tokenInfo = try await verifyAppleIDToken(idToken, on: req)
+        let appleSubject = tokenInfo.subject.value
+
+        if let user = try await User.query(on: req.db).filter(\.$appleID == appleSubject).first() {
+            let token = try generateToken(for: user, on: req)
+            return AuthResponse(user: user.convertToPublic(), token: token)
+        }
+
+        let tokenEmail = tokenInfo.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackEmail = data.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedRawEmail = (tokenEmail?.isEmpty == false) ? tokenEmail : ((fallbackEmail?.isEmpty == false) ? fallbackEmail : nil)
+        guard let resolvedRawEmail else {
+            throw Abort(
+                .badRequest,
+                reason: "Apple token did not provide email. Sign in once with email sharing enabled or provide an email from the client."
+            )
+        }
+
+        let normalizedEmail = normalizeEmail(resolvedRawEmail)
+        guard isValidEmail(normalizedEmail) else {
+            throw Abort(.badRequest, reason: "Email format is invalid.")
+        }
+
+        if let user = try await User.query(on: req.db).filter(\.$email == normalizedEmail).first() {
+            user.appleID = appleSubject
+            user.emailVerified = true
+            try await user.save(on: req.db)
+            let token = try generateToken(for: user, on: req)
+            return AuthResponse(user: user.convertToPublic(), token: token)
+        }
+
+        let invite: InviteCode?
+        if let inviteCode = data.inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !inviteCode.isEmpty {
+            invite = try await requireInviteCode(inviteCode, on: req)
+        } else {
+            invite = nil
+        }
+
+        let username = try await generateUniqueUsername(
+            base: makeUsernameBase(firstName: data.firstName, lastName: data.lastName, email: normalizedEmail),
+            on: req
+        )
+        let randomPassword = generateTokenString()
+        let user = User(username: username, email: normalizedEmail, passwordHash: try Bcrypt.hash(randomPassword), emailVerified: true)
+        user.appleID = appleSubject
+        try await user.save(on: req.db)
+
+        if let invite {
+            invite.usedAt = Date()
+            invite.$usedByUser.id = try user.requireID()
+            try await invite.save(on: req.db)
+        }
+
+        let token = try generateToken(for: user, on: req)
+        return AuthResponse(user: user.convertToPublic(), token: token)
+    }
+
     private static func generateToken(for user: User, on req: Request) throws -> String {
         let timestamp = Int(Date().timeIntervalSince1970 + req.application.jwtExpiration)
         let expiration = ExpirationClaim(value: Date(timeIntervalSince1970: TimeInterval(timestamp)))
@@ -308,8 +382,8 @@ struct AuthController: RouteCollection {
     }
 
     private static func verifyGoogleIDToken(_ idToken: String, on req: Request) async throws -> GoogleTokenInfo {
-        guard let clientID = req.application.googleClientID, !clientID.isEmpty else {
-            throw Abort(.internalServerError, reason: "Google auth is not configured.")
+        guard !req.application.googleClientIDs.isEmpty else {
+            throw Abort(.internalServerError, reason: "Google auth is not configured. Set GOOGLE_CLIENT_ID or GOOGLE_CLIENT_IDS.")
         }
 
         var components = URLComponents(string: "https://oauth2.googleapis.com/tokeninfo")
@@ -322,7 +396,7 @@ struct AuthController: RouteCollection {
         }
 
         let info = try response.content.decode(GoogleTokenInfo.self)
-        guard info.aud == clientID else {
+        guard req.application.googleClientIDs.contains(info.aud) else {
             throw Abort(.unauthorized, reason: "Invalid Google token.")
         }
 
@@ -341,18 +415,77 @@ struct AuthController: RouteCollection {
         return info
     }
 
-    private static func makeUsernameBase(from info: GoogleTokenInfo, email: String) -> String {
-        if let givenName = info.givenName, !givenName.isEmpty {
-            return givenName
+    private static func verifyAppleIDToken(_ idToken: String, on req: Request) async throws -> AppleIdentityToken {
+        guard !req.application.appleClientIDs.isEmpty else {
+            throw Abort(.internalServerError, reason: "Apple auth is not configured. Set APPLE_CLIENT_ID or APPLE_CLIENT_IDS.")
         }
+
+        var lastError: (any Error)?
+        for clientID in req.application.appleClientIDs {
+            do {
+                return try await req.jwt.apple.verify(idToken, applicationIdentifier: clientID)
+            } catch {
+                lastError = error
+            }
+        }
+
+        req.logger.warning("Apple token verification failed for all configured client IDs: \(String(describing: lastError))")
+        throw Abort(.unauthorized, reason: "Invalid Apple token.")
+    }
+
+    private static func makeUsernameBase(firstName: String?, lastName: String?, email: String) -> String {
+        if let firstName = firstName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let candidate = sanitizeUsernameBase(firstName) {
+            return candidate
+        }
+
+        if let lastName = lastName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let candidate = sanitizeUsernameBase(lastName) {
+            return candidate
+        }
+
+        return makeUsernameBase(fromEmail: email)
+    }
+
+    private static func makeUsernameBase(from info: GoogleTokenInfo, email: String) -> String {
+        if let givenName = info.givenName,
+           let candidate = sanitizeUsernameBase(givenName) {
+            return candidate
+        }
+
+        if let name = info.name,
+           let firstPart = name.split(separator: " ").first,
+           let candidate = sanitizeUsernameBase(String(firstPart)) {
+            return candidate
+        }
+
+        return makeUsernameBase(fromEmail: email)
+    }
+
+    private static func makeUsernameBase(fromEmail email: String) -> String {
         let localPart = email.split(separator: "@").first.map(String.init) ?? "user"
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-        let filtered = localPart.unicodeScalars.filter { allowed.contains($0) }
-        let base = String(String.UnicodeScalarView(filtered))
-        if base.count >= AuthPolicy.minUsernameLength {
-            return base
+        if let candidate = sanitizeUsernameBase(localPart) {
+            return candidate
         }
         return "user"
+    }
+
+    private static func sanitizeUsernameBase(_ input: String) -> String? {
+        guard !input.isEmpty else {
+            return nil
+        }
+
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        let filtered = input.unicodeScalars.filter { scalar in
+            scalar.isASCII && allowed.contains(scalar)
+        }
+        let base = String(String.UnicodeScalarView(filtered))
+
+        guard base.count >= AuthPolicy.minUsernameLength else {
+            return nil
+        }
+
+        return String(base.prefix(AuthPolicy.maxUsernameLength))
     }
 
     private static func generateUniqueUsername(base: String, on req: Request) async throws -> String {

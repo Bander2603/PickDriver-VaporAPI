@@ -37,6 +37,7 @@ curl -H "Authorization: Bearer <token>" \
 
 Alternative:
 - POST /api/auth/google (Google login/registration; no inviteCode required)
+- POST /api/auth/apple (Apple login/registration; no inviteCode required)
 
 Notes:
 - No refresh token is implemented; once JWT expires, user must log in again.
@@ -50,7 +51,8 @@ Auth:
 - email/password registration requires inviteCode
 - if INVITE_CODE is configured in backend, only that value is accepted
 - if INVITE_CODE is not configured, codes are validated against `invite_codes` table (unused codes)
-- Google auth requires GOOGLE_CLIENT_ID in backend
+- Google auth requires GOOGLE_CLIENT_ID or GOOGLE_CLIENT_IDS in backend
+- Apple auth requires APPLE_CLIENT_ID or APPLE_CLIENT_IDS in backend
 
 Leagues and teams:
 - League creation requires an active season.
@@ -145,6 +147,10 @@ Maintenance notes:
   - Req: { "idToken": "...", "inviteCode": "INVITE"? }
   - Res: { "user": UserPublic, "token": "..." }
   - Note: inviteCode is optional (Google flow does not require invitation).
+- POST /api/auth/apple
+  - Req: { "idToken": "...", "email": "a@b.com"?, "firstName": "John"?, "lastName": "Doe"?, "inviteCode": "INVITE"? }
+  - Res: { "user": UserPublic, "token": "..." }
+  - Note: inviteCode is optional. `email` is a fallback when Apple does not include email in subsequent sign-ins.
 - GET /api/auth/profile (auth)
   - Res: UserPublic
 - PUT /api/auth/password (auth)
