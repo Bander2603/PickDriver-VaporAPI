@@ -6,6 +6,7 @@ struct InternalOpsController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         routes.get("db-info", use: dbInfo)
         routes.grouped("backup").post("validate", use: validateBackup)
+        routes.grouped("push").post("test", use: testPush)
     }
 
     private let expectedCriticalTables: [String] = [
@@ -77,6 +78,43 @@ struct InternalOpsController: RouteCollection {
         let target: String?
     }
 
+    struct PushTestRequest: Content {
+        let userID: Int
+        let title: String?
+        let body: String?
+        let leagueID: Int?
+        let raceID: Int?
+        let draftID: Int?
+        let pickIndex: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case userID = "user_id"
+            case title
+            case body
+            case leagueID = "league_id"
+            case raceID = "race_id"
+            case draftID = "draft_id"
+            case pickIndex = "pick_index"
+        }
+    }
+
+    struct PushTestTokenResult: Content {
+        let tokenID: Int?
+        let tokenSuffix: String
+        let status: String
+        let reason: String?
+    }
+
+    struct PushTestResponse: Content {
+        let userID: Int
+        let attempted: Int
+        let delivered: Int
+        let invalidated: Int
+        let failed: Int
+        let results: [PushTestTokenResult]
+        let sentAt: Date
+    }
+
     private enum ResolvedTarget: String {
         case primary
         case drill
@@ -87,6 +125,103 @@ struct InternalOpsController: RouteCollection {
             case .drill: return "drill"
             }
         }
+    }
+
+    func testPush(_ req: Request) async throws -> PushTestResponse {
+        guard req.application.apnsService.isEnabled else {
+            throw Abort(.badRequest, reason: "APNS is disabled. Enable APNS_* environment variables first.")
+        }
+
+        let payload = try req.content.decode(PushTestRequest.self)
+        let title = payload.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = payload.body?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = (title?.isEmpty == false ? title : nil) ?? "PickDriver push test"
+        let resolvedBody = (body?.isEmpty == false ? body : nil) ?? "Backend APNS test notification."
+        let notificationData = NotificationPayload(
+            leagueID: payload.leagueID,
+            raceID: payload.raceID,
+            draftID: payload.draftID,
+            pickIndex: payload.pickIndex
+        )
+
+        let activeTokens = try await PushToken.query(on: req.db)
+            .filter(\.$user.$id == payload.userID)
+            .filter(\.$isActive == true)
+            .all()
+
+        guard !activeTokens.isEmpty else {
+            throw Abort(.notFound, reason: "No active push tokens found for user \(payload.userID).")
+        }
+
+        var delivered = 0
+        var invalidated = 0
+        var failed = 0
+        var results: [PushTestTokenResult] = []
+        results.reserveCapacity(activeTokens.count)
+
+        for token in activeTokens {
+            do {
+                let result = try await req.application.apnsService.sendAlert(
+                    title: resolvedTitle,
+                    body: resolvedBody,
+                    data: notificationData,
+                    to: token.token,
+                    on: req.application
+                )
+
+                switch result {
+                case .delivered:
+                    delivered += 1
+                    token.lastSeenAt = Date()
+                    try await token.save(on: req.db)
+                    results.append(.init(
+                        tokenID: token.id,
+                        tokenSuffix: String(token.token.suffix(8)),
+                        status: "delivered",
+                        reason: nil
+                    ))
+
+                case let .invalidDeviceToken(reason):
+                    invalidated += 1
+                    token.isActive = false
+                    token.lastSeenAt = Date()
+                    try await token.save(on: req.db)
+                    results.append(.init(
+                        tokenID: token.id,
+                        tokenSuffix: String(token.token.suffix(8)),
+                        status: "invalidated",
+                        reason: reason
+                    ))
+
+                case let .rejected(status, reason):
+                    failed += 1
+                    results.append(.init(
+                        tokenID: token.id,
+                        tokenSuffix: String(token.token.suffix(8)),
+                        status: "rejected",
+                        reason: reason ?? "HTTP \(status.code)"
+                    ))
+                }
+            } catch {
+                failed += 1
+                results.append(.init(
+                    tokenID: token.id,
+                    tokenSuffix: String(token.token.suffix(8)),
+                    status: "error",
+                    reason: error.localizedDescription
+                ))
+            }
+        }
+
+        return PushTestResponse(
+            userID: payload.userID,
+            attempted: activeTokens.count,
+            delivered: delivered,
+            invalidated: invalidated,
+            failed: failed,
+            results: results,
+            sentAt: Date()
+        )
     }
 
     func dbInfo(_ req: Request) async throws -> DBInfoResponse {

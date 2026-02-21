@@ -33,9 +33,68 @@ enum NotificationService {
         return sql
     }
 
+    private static func deliverIfPossible(
+        _ notification: PushNotification,
+        on db: any Database,
+        app: Application
+    ) async {
+        guard app.apnsService.isEnabled else { return }
+
+        let recipientID = notification.$user.id
+
+        do {
+            let activeTokens = try await PushToken.query(on: db)
+                .filter(\.$user.$id == recipientID)
+                .filter(\.$isActive == true)
+                .all()
+
+            guard !activeTokens.isEmpty else { return }
+
+            var delivered = false
+            for token in activeTokens {
+                do {
+                    let result = try await app.apnsService.sendAlert(
+                        title: notification.title,
+                        body: notification.body,
+                        data: notification.data,
+                        to: token.token,
+                        on: app
+                    )
+
+                    switch result {
+                    case .delivered:
+                        delivered = true
+                        token.lastSeenAt = Date()
+                        try await token.save(on: db)
+
+                    case let .invalidDeviceToken(reason):
+                        token.isActive = false
+                        token.lastSeenAt = Date()
+                        try await token.save(on: db)
+                        app.logger.warning("APNS invalid token deactivated for user \(recipientID). Reason: \(reason)")
+
+                    case let .rejected(status, reason):
+                        let normalized = reason ?? "n/a"
+                        app.logger.warning("APNS rejected delivery for user \(recipientID). Status: \(status.code). Reason: \(normalized)")
+                    }
+                } catch {
+                    app.logger.warning("APNS delivery error for user \(recipientID): \(error.localizedDescription)")
+                }
+            }
+
+            if delivered {
+                notification.deliveredAt = Date()
+                try await notification.save(on: db)
+            }
+        } catch {
+            app.logger.warning("APNS delivery pipeline failed for user \(recipientID): \(error.localizedDescription)")
+        }
+    }
+
     @discardableResult
     static func notifyDraftTurn(
         on db: any Database,
+        app: Application,
         recipientID: Int,
         league: League,
         race: Race,
@@ -63,11 +122,12 @@ enum NotificationService {
         )
 
         try await notification.save(on: db)
+        await deliverIfPossible(notification, on: db, app: app)
         return notification
     }
 
     @discardableResult
-    static func notifyRaceResults(on db: any Database, raceID: Int) async throws -> Int {
+    static func notifyRaceResults(on db: any Database, app: Application, raceID: Int) async throws -> Int {
         let sql = try sql(db)
 
         guard let race = try await Race.find(raceID, on: db) else {
@@ -116,6 +176,7 @@ enum NotificationService {
             )
 
             try await notification.save(on: db)
+            await deliverIfPossible(notification, on: db, app: app)
             created += 1
         }
 

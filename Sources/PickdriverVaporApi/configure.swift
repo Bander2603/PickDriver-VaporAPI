@@ -63,6 +63,50 @@ public func configure(_ app: Application) async throws {
         app.appleClientIDs = []
     }
 
+    let apnsEnabled = envBool("APNS_ENABLED", default: false)
+    if apnsEnabled {
+        guard let keyID = envString("APNS_KEY_ID") else {
+            throw Abort(.internalServerError, reason: "APNS_ENABLED=true but APNS_KEY_ID is missing.")
+        }
+        guard let teamID = envString("APNS_TEAM_ID") else {
+            throw Abort(.internalServerError, reason: "APNS_ENABLED=true but APNS_TEAM_ID is missing.")
+        }
+        guard let topic = envString("APNS_TOPIC") else {
+            throw Abort(.internalServerError, reason: "APNS_ENABLED=true but APNS_TOPIC is missing.")
+        }
+        guard let keyPath = envString("APNS_PRIVATE_KEY_PATH") else {
+            throw Abort(.internalServerError, reason: "APNS_ENABLED=true but APNS_PRIVATE_KEY_PATH is missing.")
+        }
+        guard let environmentRaw = envString("APNS_ENVIRONMENT")?.lowercased(),
+              let environment = APNSEnvironment(rawValue: environmentRaw) else {
+            throw Abort(.internalServerError, reason: "APNS_ENABLED=true but APNS_ENVIRONMENT must be sandbox or production.")
+        }
+
+        let privateKeyPEM: String
+        do {
+            privateKeyPEM = try String(contentsOfFile: keyPath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            throw Abort(.internalServerError, reason: "Could not read APNS private key at APNS_PRIVATE_KEY_PATH=\(keyPath).")
+        }
+
+        guard !privateKeyPEM.isEmpty else {
+            throw Abort(.internalServerError, reason: "APNS private key file is empty: \(keyPath).")
+        }
+
+        let apnsConfig = APNSConfiguration(
+            keyID: keyID,
+            teamID: teamID,
+            topic: topic,
+            environment: environment,
+            privateKeyPEM: privateKeyPEM
+        )
+        app.apnsService = try LiveAPNSService(config: apnsConfig)
+        app.logger.info("APNS enabled (\(environment.rawValue)) for topic \(topic).")
+    } else {
+        app.apnsService = DisabledAPNSService()
+    }
+
     // uncomment to serve files from /Public folder
     // app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 

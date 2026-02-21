@@ -341,6 +341,7 @@ struct LeagueController: RouteCollection {
             if i == 0, let firstUserID = pickOrder.first {
                 try await NotificationService.notifyDraftTurn(
                     on: req.db,
+                    app: req.application,
                     recipientID: firstUserID,
                     league: league,
                     race: race,
