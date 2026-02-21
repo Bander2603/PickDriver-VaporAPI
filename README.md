@@ -46,6 +46,8 @@ See `.env.example` for the full list. Key values:
   - Default is `require` in production, `disable` otherwise
 - `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_IDS` (optional; for web+iOS use comma-separated `GOOGLE_CLIENT_IDS`)
 - `APPLE_CLIENT_ID` or `APPLE_CLIENT_IDS` (optional; for native app Sign in with Apple)
+- `APNS_ENABLED` (optional; enables APNS delivery when `true`)
+- `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`, `APNS_PRIVATE_KEY_PATH`, `APNS_ENVIRONMENT` (required when `APNS_ENABLED=true`)
 - `INVITE_CODE` (optional)
 - `ENABLE_INTERNAL_ROUTES` (optional, default `true`)
 - `INTERNAL_SERVICE_TOKEN` (required only when `ENABLE_INTERNAL_ROUTES=true`)

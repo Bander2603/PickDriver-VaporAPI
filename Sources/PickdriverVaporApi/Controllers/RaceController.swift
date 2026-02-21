@@ -96,7 +96,11 @@ struct RaceController: RouteCollection {
             try await race.save(on: req.db)
         }
 
-        let created = try await NotificationService.notifyRaceResults(on: req.db, raceID: raceID)
+        let created = try await NotificationService.notifyRaceResults(
+            on: req.db,
+            app: req.application,
+            raceID: raceID
+        )
         return PublishResultsResponse(createdNotifications: created)
     }
 }

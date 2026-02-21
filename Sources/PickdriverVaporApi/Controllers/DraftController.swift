@@ -200,6 +200,7 @@ struct DraftController: RouteCollection {
         if let nextUserID {
             try await NotificationService.notifyDraftTurn(
                 on: req.db,
+                app: req.application,
                 recipientID: nextUserID,
                 league: league,
                 race: race,
@@ -454,6 +455,7 @@ struct DraftController: RouteCollection {
         if let nextUserID = draft.pickOrder[safe: draft.currentPickIndex] {
             try await NotificationService.notifyDraftTurn(
                 on: req.db,
+                app: req.application,
                 recipientID: nextUserID,
                 league: league,
                 race: race,

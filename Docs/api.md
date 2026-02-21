@@ -121,6 +121,10 @@ Notifications:
   - Required header: `X-Internal-Token`
   - Req: `{ "target": "drill"|"staging"|"primary", "backupId": String, "checksProfile": "quick"|"full", "source": "vault-worker"?, "reason": String? }`
   - Res: `{ "success": Bool, "checks": [{ "name": String, "status": "ok"|"warn"|"fail", "details": String, "latencyMs": Double? }], "summary": { "passed": Int, "failed": Int, "warnings": Int }, "validatedAtUtc": Date }`
+- POST /api/internal/ops/push/test
+  - Required header: `X-Internal-Token`
+  - Req: `{ "user_id": Int, "title": String?, "body": String?, "league_id": Int?, "race_id": Int?, "draft_id": Int?, "pick_index": Int? }`
+  - Res: `{ "userID": Int, "attempted": Int, "delivered": Int, "invalidated": Int, "failed": Int, "results": [{ "tokenID": Int?, "tokenSuffix": String, "status": String, "reason": String? }], "sentAt": Date }`
 
 Maintenance notes:
 - When `maintenanceMode` is enabled, API returns `503` for `/api/*` routes except `/api/health/*` and `/api/internal/*`.
