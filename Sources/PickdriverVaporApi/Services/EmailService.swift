@@ -5,9 +5,6 @@
 //  Created by Eduardo Melcon Diez on 28.01.26.
 //
 
-
-// NOT IMPLEMENTED. MAYBE IN A FUTURE?
-
 import Vapor
 
 protocol EmailService: Sendable {
@@ -33,7 +30,7 @@ struct LogEmailService: EmailService {
         verificationLink: String,
         on req: Request
     ) async throws {
-        req.logger.info("📧 [EMAIL] Verification link for \(email): \(verificationLink)")
+        req.logger.info("[EMAIL] Verification link for \(email): \(verificationLink)")
     }
 
     func sendPasswordResetEmail(
@@ -42,35 +39,29 @@ struct LogEmailService: EmailService {
         resetLink: String,
         on req: Request
     ) async throws {
-        req.logger.info("📧 [EMAIL] Password reset link for \(email): \(resetLink)")
+        req.logger.info("[EMAIL] Password reset link for \(email): \(resetLink)")
     }
 }
 
-struct SendGridEmailService: EmailService {
-    struct EmailAddress: Content {
-        let email: String
-        let name: String?
-    }
-
-    struct Personalization: Content {
-        let to: [EmailAddress]
+struct ResendEmailService: EmailService {
+    private struct ResendEmailRequest: Content {
+        let from: String
+        let to: [String]
         let subject: String
-    }
-
-    struct ContentItem: Content {
-        let type: String
-        let value: String
-    }
-
-    struct SendGridRequest: Content {
-        let personalizations: [Personalization]
-        let from: EmailAddress
-        let content: [ContentItem]
+        let text: String
+        let html: String
     }
 
     let apiKey: String
     let fromEmail: String
     let fromName: String?
+
+    private var fromHeader: String {
+        guard let fromName, !fromName.isEmpty else {
+            return fromEmail
+        }
+        return "\(fromName) <\(fromEmail)>"
+    }
 
     func sendVerificationEmail(
         to email: String,
@@ -78,46 +69,27 @@ struct SendGridEmailService: EmailService {
         verificationLink: String,
         on req: Request
     ) async throws {
-        let subject = "Verifica tu email"
-        let textBody = """
-        Hola \(username),
+        let payload = ResendEmailRequest(
+            from: fromHeader,
+            to: [email],
+            subject: "Verifica tu email",
+            text: """
+            Hola \(username),
 
-        Confirma tu email haciendo click en el siguiente enlace:
-        \(verificationLink)
+            Confirma tu email abriendo el siguiente enlace:
+            \(verificationLink)
 
-        Si no creaste esta cuenta, puedes ignorar este correo.
-        """
-        let htmlBody = """
-        <p>Hola \(username),</p>
-        <p>Confirma tu email haciendo click en el siguiente enlace:</p>
-        <p><a href="\(verificationLink)">Verificar email</a></p>
-        <p>Si no creaste esta cuenta, puedes ignorar este correo.</p>
-        """
-
-        let payload = SendGridRequest(
-            personalizations: [
-                Personalization(
-                    to: [EmailAddress(email: email, name: username)],
-                    subject: subject
-                )
-            ],
-            from: EmailAddress(email: fromEmail, name: fromName),
-            content: [
-                ContentItem(type: "text/plain", value: textBody),
-                ContentItem(type: "text/html", value: htmlBody)
-            ]
+            Si no creaste esta cuenta, puedes ignorar este correo.
+            """,
+            html: """
+            <p>Hola \(username),</p>
+            <p>Confirma tu email abriendo el siguiente enlace:</p>
+            <p><a href="\(verificationLink)">Verificar email</a></p>
+            <p>Si no creaste esta cuenta, puedes ignorar este correo.</p>
+            """
         )
 
-        var headers = HTTPHeaders()
-        headers.add(name: "Authorization", value: "Bearer \(apiKey)")
-
-        let response = try await req.client.post(URI(string: "https://api.sendgrid.com/v3/mail/send"), headers: headers) { clientReq in
-            try clientReq.content.encode(payload, as: .json)
-        }
-
-        guard response.status == .accepted else {
-            throw Abort(.internalServerError, reason: "Failed to send verification email.")
-        }
+        try await send(payload: payload, on: req)
     }
 
     func sendPasswordResetEmail(
@@ -126,45 +98,55 @@ struct SendGridEmailService: EmailService {
         resetLink: String,
         on req: Request
     ) async throws {
-        let subject = "Restablece tu contraseña"
-        let textBody = """
-        Hola \(username),
+        let payload = ResendEmailRequest(
+            from: fromHeader,
+            to: [email],
+            subject: "Restablece tu contrasena",
+            text: """
+            Hola \(username),
 
-        Para restablecer tu contraseña, abre el siguiente enlace:
-        \(resetLink)
+            Para restablecer tu contrasena, abre el siguiente enlace:
+            \(resetLink)
 
-        Si no solicitaste este cambio, puedes ignorar este correo.
-        """
-        let htmlBody = """
-        <p>Hola \(username),</p>
-        <p>Para restablecer tu contraseña, abre el siguiente enlace:</p>
-        <p><a href="\(resetLink)">Restablecer contraseña</a></p>
-        <p>Si no solicitaste este cambio, puedes ignorar este correo.</p>
-        """
-
-        let payload = SendGridRequest(
-            personalizations: [
-                Personalization(
-                    to: [EmailAddress(email: email, name: username)],
-                    subject: subject
-                )
-            ],
-            from: EmailAddress(email: fromEmail, name: fromName),
-            content: [
-                ContentItem(type: "text/plain", value: textBody),
-                ContentItem(type: "text/html", value: htmlBody)
-            ]
+            Si no solicitaste este cambio, puedes ignorar este correo.
+            """,
+            html: """
+            <p>Hola \(username),</p>
+            <p>Para restablecer tu contrasena, abre el siguiente enlace:</p>
+            <p><a href="\(resetLink)">Restablecer contrasena</a></p>
+            <p>Si no solicitaste este cambio, puedes ignorar este correo.</p>
+            """
         )
 
-        var headers = HTTPHeaders()
-        headers.add(name: "Authorization", value: "Bearer \(apiKey)")
+        try await send(payload: payload, on: req)
+    }
 
-        let response = try await req.client.post(URI(string: "https://api.sendgrid.com/v3/mail/send"), headers: headers) { clientReq in
-            try clientReq.content.encode(payload, as: .json)
+    private func send(payload: ResendEmailRequest, on req: Request) async throws {
+        var headers = HTTPHeaders()
+        headers.add(name: .authorization, value: "Bearer \(apiKey)")
+
+        let response = try await req.client.post(
+            URI(string: "https://api.resend.com/emails"),
+            headers: headers
+        ) { clientReq in
+            try clientReq.content.encode(payload)
         }
 
-        guard response.status == .accepted else {
-            throw Abort(.internalServerError, reason: "Failed to send password reset email.")
+        guard (200..<300).contains(response.status.code) else {
+            let body: String
+            if let responseBody = response.body {
+                body = responseBody.getString(at: responseBody.readerIndex, length: responseBody.readableBytes) ?? ""
+            } else {
+                body = ""
+            }
+            req.logger.error(
+                "Resend API failed",
+                metadata: [
+                    "status": "\(response.status.code)",
+                    "body": "\(body)"
+                ]
+            )
+            throw Abort(.internalServerError, reason: "Failed to send email.")
         }
     }
 }

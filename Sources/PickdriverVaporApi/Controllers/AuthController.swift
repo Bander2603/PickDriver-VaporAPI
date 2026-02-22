@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CryptoKit
 import Vapor
 import Fluent
 import JWT
@@ -23,11 +24,11 @@ struct RegisterRequest: Content {
     let username: String
     let email: String
     let password: String
-    let inviteCode: String
 }
 
 struct RegisterResponse: Content {
     let user: User.Public
+    let verificationEmailSent: Bool
 }
 
 struct LoginRequest: Content {
@@ -42,7 +43,6 @@ struct AuthResponse: Content {
 
 struct GoogleAuthRequest: Content {
     let idToken: String
-    let inviteCode: String?
 }
 
 struct AppleAuthRequest: Content {
@@ -50,7 +50,27 @@ struct AppleAuthRequest: Content {
     let email: String?
     let firstName: String?
     let lastName: String?
-    let inviteCode: String?
+}
+
+struct ResendVerificationRequest: Content {
+    let email: String
+}
+
+struct ForgotPasswordRequest: Content {
+    let email: String
+}
+
+struct ResetPasswordRequest: Content {
+    let token: String
+    let newPassword: String
+}
+
+struct TokenQuery: Content {
+    let token: String
+}
+
+struct AuthMessageResponse: Content {
+    let message: String
 }
 
 private enum AuthPolicy {
@@ -66,6 +86,14 @@ struct AuthController: RouteCollection {
         options: [.caseInsensitive]
     )
 
+    private static let genericVerificationMessage = AuthMessageResponse(
+        message: "If the account exists and is pending verification, a verification email has been sent."
+    )
+
+    private static let genericResetMessage = AuthMessageResponse(
+        message: "If the account exists, password reset instructions have been sent."
+    )
+
     func boot(routes: any RoutesBuilder) throws {
         let auth = routes.grouped("api", "auth")
 
@@ -73,6 +101,11 @@ struct AuthController: RouteCollection {
         auth.post("login", use: Self.loginHandler)
         auth.post("google", use: Self.googleAuthHandler)
         auth.post("apple", use: Self.appleAuthHandler)
+        auth.post("resend-verification", use: Self.resendVerificationHandler)
+        auth.get("verify-email-link", use: Self.verifyEmailLinkHandler)
+        auth.post("forgot-password", use: Self.forgotPasswordHandler)
+        auth.get("reset-password-link", use: Self.resetPasswordLinkHandler)
+        auth.post("reset-password", use: Self.resetPasswordHandler)
 
         let protected = auth.grouped(UserAuthenticator())
         protected.get("profile", use: Self.profileHandler)
@@ -84,16 +117,12 @@ struct AuthController: RouteCollection {
         let data = try req.content.decode(RegisterRequest.self)
         let username = normalizeUsername(data.username)
         let email = normalizeEmail(data.email)
-        let inviteCode = data.inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard isValidUsername(username) else {
             throw Abort(.badRequest, reason: "Username must be 3-20 characters and use only letters, numbers, dots, dashes, or underscores.")
         }
         guard isValidEmail(email) else {
             throw Abort(.badRequest, reason: "Email format is invalid.")
-        }
-        guard !inviteCode.isEmpty else {
-            throw Abort(.badRequest, reason: "Invite code is required.")
         }
         guard data.password.count >= AuthPolicy.minPasswordLength else {
             throw Abort(.badRequest, reason: "Password must be at least \(AuthPolicy.minPasswordLength) characters long.")
@@ -107,18 +136,11 @@ struct AuthController: RouteCollection {
         }
 
         let hash = try Bcrypt.hash(data.password)
-        let invite = try await requireInviteCode(inviteCode, on: req)
-
-        let user = User(username: username, email: email, passwordHash: hash, emailVerified: true)
+        let user = User(username: username, email: email, passwordHash: hash, emailVerified: false)
         try await user.save(on: req.db)
 
-        if let invite {
-            invite.usedAt = Date()
-            invite.$usedByUser.id = try user.requireID()
-            try await invite.save(on: req.db)
-        }
-
-        return RegisterResponse(user: user.convertToPublic())
+        let verificationEmailSent = await sendVerificationEmail(for: user, on: req, enforceResendInterval: false)
+        return RegisterResponse(user: user.convertToPublic(), verificationEmailSent: verificationEmailSent)
     }
 
     static func loginHandler(_ req: Request) async throws -> AuthResponse {
@@ -133,9 +155,143 @@ struct AuthController: RouteCollection {
             throw Abort(.unauthorized, reason: "Invalid email or password.")
         }
 
-        let token = try generateToken(for: user, on: req)
+        guard user.emailVerified else {
+            throw Abort(.forbidden, reason: "Email not verified. Please verify your email before logging in.")
+        }
 
+        let token = try generateToken(for: user, on: req)
         return AuthResponse(user: user.convertToPublic(), token: token)
+    }
+
+    static func resendVerificationHandler(_ req: Request) async throws -> AuthMessageResponse {
+        let data = try req.content.decode(ResendVerificationRequest.self)
+        let email = normalizeEmail(data.email)
+
+        guard isValidEmail(email) else {
+            return genericVerificationMessage
+        }
+
+        guard let user = try await User.query(on: req.db).filter(\.$email == email).first(), !user.emailVerified else {
+            return genericVerificationMessage
+        }
+
+        _ = await sendVerificationEmail(for: user, on: req, enforceResendInterval: true)
+        return genericVerificationMessage
+    }
+
+    static func verifyEmailLinkHandler(_ req: Request) async throws -> Response {
+        guard let query = try? req.query.decode(TokenQuery.self) else {
+            return try verificationFailureResponse(on: req)
+        }
+
+        let rawToken = query.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawToken.isEmpty, rawToken.count <= 1024 else {
+            return try verificationFailureResponse(on: req)
+        }
+
+        let tokenHash = hashToken(rawToken)
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$emailVerificationTokenHash == tokenHash)
+            .first()
+        else {
+            return try verificationFailureResponse(on: req)
+        }
+
+        guard let expiresAt = user.emailVerificationExpiresAt, expiresAt > Date() else {
+            user.emailVerificationTokenHash = nil
+            user.emailVerificationExpiresAt = nil
+            try await user.save(on: req.db)
+            return try verificationFailureResponse(on: req)
+        }
+
+        user.emailVerified = true
+        user.emailVerificationTokenHash = nil
+        user.emailVerificationExpiresAt = nil
+        user.emailVerificationSentAt = nil
+        try await user.save(on: req.db)
+
+        return try verificationSuccessResponse(on: req)
+    }
+
+    static func forgotPasswordHandler(_ req: Request) async throws -> AuthMessageResponse {
+        let data = try req.content.decode(ForgotPasswordRequest.self)
+        let email = normalizeEmail(data.email)
+
+        guard isValidEmail(email) else {
+            return genericResetMessage
+        }
+
+        guard let user = try await User.query(on: req.db).filter(\.$email == email).first() else {
+            return genericResetMessage
+        }
+
+        _ = await sendPasswordResetEmail(for: user, on: req, enforceResendInterval: true)
+        return genericResetMessage
+    }
+
+    static func resetPasswordLinkHandler(_ req: Request) throws -> Response {
+        guard let query = try? req.query.decode(TokenQuery.self) else {
+            throw Abort(.badRequest, reason: "Reset token is required.")
+        }
+
+        let rawToken = query.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawToken.isEmpty else {
+            throw Abort(.badRequest, reason: "Reset token is required.")
+        }
+
+        if let redirect = req.application.passwordResetRedirectURL {
+            let location = addQueryItems(
+                to: redirect,
+                items: [URLQueryItem(name: "token", value: rawToken)]
+            )
+            return req.redirect(to: location)
+        }
+
+        let response = Response(status: .ok)
+        try response.content.encode(
+            AuthMessageResponse(
+                message: "Token received. Use POST /api/auth/reset-password with token and newPassword."
+            )
+        )
+        return response
+    }
+
+    static func resetPasswordHandler(_ req: Request) async throws -> AuthMessageResponse {
+        let data = try req.content.decode(ResetPasswordRequest.self)
+        let rawToken = data.token.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !rawToken.isEmpty else {
+            throw Abort(.badRequest, reason: "Reset token is required.")
+        }
+        guard data.newPassword.count >= AuthPolicy.minPasswordLength else {
+            throw Abort(.badRequest, reason: "New password must be at least \(AuthPolicy.minPasswordLength) characters long.")
+        }
+
+        let tokenHash = hashToken(rawToken)
+        guard let user = try await User.query(on: req.db)
+            .filter(\.$passwordResetTokenHash == tokenHash)
+            .first(),
+              let expiresAt = user.passwordResetExpiresAt,
+              expiresAt > Date()
+        else {
+            throw Abort(.badRequest, reason: "Invalid or expired password reset token.")
+        }
+
+        guard try !Bcrypt.verify(data.newPassword, created: user.passwordHash) else {
+            throw Abort(.badRequest, reason: "New password must be different from the current password.")
+        }
+
+        user.passwordHash = try Bcrypt.hash(data.newPassword)
+        user.passwordResetTokenHash = nil
+        user.passwordResetExpiresAt = nil
+        user.passwordResetSentAt = nil
+        user.emailVerified = true
+        user.emailVerificationTokenHash = nil
+        user.emailVerificationExpiresAt = nil
+        user.emailVerificationSentAt = nil
+
+        try await user.save(on: req.db)
+        return AuthMessageResponse(message: "Password updated successfully.")
     }
 
     static func profileHandler(_ req: Request) throws -> User.Public {
@@ -197,6 +353,7 @@ struct AuthController: RouteCollection {
         guard !idToken.isEmpty else {
             throw Abort(.badRequest, reason: "idToken is required.")
         }
+
         let tokenInfo = try await verifyGoogleIDToken(idToken, on: req)
         let normalizedEmail = normalizeEmail(tokenInfo.email)
 
@@ -208,18 +365,15 @@ struct AuthController: RouteCollection {
         if let user = try await User.query(on: req.db).filter(\.$email == normalizedEmail).first() {
             user.googleID = tokenInfo.sub
             user.emailVerified = true
+            user.emailVerificationTokenHash = nil
+            user.emailVerificationExpiresAt = nil
+            user.emailVerificationSentAt = nil
             try await user.save(on: req.db)
+
             let token = try generateToken(for: user, on: req)
             return AuthResponse(user: user.convertToPublic(), token: token)
         }
 
-        let invite: InviteCode?
-        if let inviteCode = data.inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !inviteCode.isEmpty {
-            invite = try await requireInviteCode(inviteCode, on: req)
-        } else {
-            invite = nil
-        }
         let username = try await generateUniqueUsername(
             base: makeUsernameBase(from: tokenInfo, email: normalizedEmail),
             on: req
@@ -228,12 +382,6 @@ struct AuthController: RouteCollection {
         let user = User(username: username, email: normalizedEmail, passwordHash: try Bcrypt.hash(randomPassword), emailVerified: true)
         user.googleID = tokenInfo.sub
         try await user.save(on: req.db)
-
-        if let invite {
-            invite.usedAt = Date()
-            invite.$usedByUser.id = try user.requireID()
-            try await invite.save(on: req.db)
-        }
 
         let token = try generateToken(for: user, on: req)
         return AuthResponse(user: user.convertToPublic(), token: token)
@@ -272,17 +420,12 @@ struct AuthController: RouteCollection {
         if let user = try await User.query(on: req.db).filter(\.$email == normalizedEmail).first() {
             user.appleID = appleSubject
             user.emailVerified = true
+            user.emailVerificationTokenHash = nil
+            user.emailVerificationExpiresAt = nil
+            user.emailVerificationSentAt = nil
             try await user.save(on: req.db)
             let token = try generateToken(for: user, on: req)
             return AuthResponse(user: user.convertToPublic(), token: token)
-        }
-
-        let invite: InviteCode?
-        if let inviteCode = data.inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !inviteCode.isEmpty {
-            invite = try await requireInviteCode(inviteCode, on: req)
-        } else {
-            invite = nil
         }
 
         let username = try await generateUniqueUsername(
@@ -294,14 +437,128 @@ struct AuthController: RouteCollection {
         user.appleID = appleSubject
         try await user.save(on: req.db)
 
-        if let invite {
-            invite.usedAt = Date()
-            invite.$usedByUser.id = try user.requireID()
-            try await invite.save(on: req.db)
-        }
-
         let token = try generateToken(for: user, on: req)
         return AuthResponse(user: user.convertToPublic(), token: token)
+    }
+
+    private static func sendVerificationEmail(
+        for user: User,
+        on req: Request,
+        enforceResendInterval: Bool
+    ) async -> Bool {
+        do {
+            let now = Date()
+            if enforceResendInterval,
+               isRateLimited(lastSentAt: user.emailVerificationSentAt, interval: req.application.emailVerificationResendInterval, now: now) {
+                return false
+            }
+
+            let rawToken = generateTokenString()
+            user.emailVerificationTokenHash = hashToken(rawToken)
+            user.emailVerificationExpiresAt = now.addingTimeInterval(req.application.emailVerificationExpiration)
+            user.emailVerificationSentAt = now
+            try await user.save(on: req.db)
+
+            let verificationLink = addQueryItems(
+                to: req.application.emailVerificationLinkBaseURL,
+                items: [URLQueryItem(name: "token", value: rawToken)]
+            )
+            try await req.application.emailService.sendVerificationEmail(
+                to: user.email,
+                username: user.username,
+                verificationLink: verificationLink,
+                on: req
+            )
+            return true
+        } catch {
+            req.logger.error("Failed to send verification email", metadata: ["error": "\(error.localizedDescription)"])
+            return false
+        }
+    }
+
+    private static func sendPasswordResetEmail(
+        for user: User,
+        on req: Request,
+        enforceResendInterval: Bool
+    ) async -> Bool {
+        do {
+            let now = Date()
+            if enforceResendInterval,
+               isRateLimited(lastSentAt: user.passwordResetSentAt, interval: req.application.passwordResetResendInterval, now: now) {
+                return false
+            }
+
+            let rawToken = generateTokenString()
+            user.passwordResetTokenHash = hashToken(rawToken)
+            user.passwordResetExpiresAt = now.addingTimeInterval(req.application.passwordResetExpiration)
+            user.passwordResetSentAt = now
+            try await user.save(on: req.db)
+
+            let resetLink = addQueryItems(
+                to: req.application.passwordResetLinkBaseURL,
+                items: [URLQueryItem(name: "token", value: rawToken)]
+            )
+            try await req.application.emailService.sendPasswordResetEmail(
+                to: user.email,
+                username: user.username,
+                resetLink: resetLink,
+                on: req
+            )
+            return true
+        } catch {
+            req.logger.error("Failed to send password reset email", metadata: ["error": "\(error.localizedDescription)"])
+            return false
+        }
+    }
+
+    private static func isRateLimited(lastSentAt: Date?, interval: Double, now: Date) -> Bool {
+        guard interval > 0, let lastSentAt else {
+            return false
+        }
+        return now.timeIntervalSince(lastSentAt) < interval
+    }
+
+    private static func verificationSuccessResponse(on req: Request) throws -> Response {
+        if let redirect = req.application.emailVerificationSuccessRedirectURL {
+            let location = addQueryItems(
+                to: redirect,
+                items: [URLQueryItem(name: "status", value: "success")]
+            )
+            return req.redirect(to: location)
+        }
+
+        let response = Response(status: .ok)
+        try response.content.encode(AuthMessageResponse(message: "Email verified successfully."))
+        return response
+    }
+
+    private static func verificationFailureResponse(on req: Request) throws -> Response {
+        if let redirect = req.application.emailVerificationSuccessRedirectURL {
+            let location = addQueryItems(
+                to: redirect,
+                items: [URLQueryItem(name: "status", value: "invalid")]
+            )
+            return req.redirect(to: location)
+        }
+
+        throw Abort(.badRequest, reason: "Invalid or expired verification token.")
+    }
+
+    private static func addQueryItems(to baseURL: String, items: [URLQueryItem]) -> String {
+        guard var components = URLComponents(string: baseURL) else {
+            return baseURL
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.append(contentsOf: items)
+        components.queryItems = queryItems
+
+        return components.url?.absoluteString ?? baseURL
+    }
+
+    private static func hashToken(_ token: String) -> String {
+        let digest = SHA256.hash(data: Data(token.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func generateToken(for user: User, on req: Request) throws -> String {
@@ -355,30 +612,6 @@ struct AuthController: RouteCollection {
             case givenName = "given_name"
             case familyName = "family_name"
         }
-    }
-
-    private static func requireInviteCode(_ code: String, on req: Request) async throws -> InviteCode? {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw Abort(.badRequest, reason: "Invite code is required.")
-        }
-
-        if let envCode = Environment.get("INVITE_CODE"), !envCode.isEmpty {
-            guard trimmed == envCode else {
-                throw Abort(.forbidden, reason: "Invalid invite code.")
-            }
-            return nil
-        }
-
-        guard let invite = try await InviteCode.query(on: req.db)
-            .filter(\.$code == trimmed)
-            .filter(\.$usedAt == nil)
-            .first()
-        else {
-            throw Abort(.forbidden, reason: "Invalid invite code.")
-        }
-
-        return invite
     }
 
     private static func verifyGoogleIDToken(_ idToken: String, on req: Request) async throws -> GoogleTokenInfo {
@@ -518,5 +751,4 @@ struct AuthController: RouteCollection {
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
     }
-
 }

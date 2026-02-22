@@ -1,0 +1,12 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+
+/.well-known/apple-app-site-association
+  Content-Type: application/json; charset=utf-8
+  Cache-Control: max-age=300
+
+/apple-app-site-association
+  Content-Type: application/json; charset=utf-8
+  Cache-Control: max-age=300

@@ -8,6 +8,49 @@
 import XCTVapor
 @testable import PickdriverVaporApi
 
+private actor CapturedEmails {
+    private var verificationLinks: [String] = []
+    private var resetLinks: [String] = []
+
+    func appendVerification(_ link: String) {
+        verificationLinks.append(link)
+    }
+
+    func appendReset(_ link: String) {
+        resetLinks.append(link)
+    }
+
+    func latestVerification() -> String? {
+        verificationLinks.last
+    }
+
+    func latestReset() -> String? {
+        resetLinks.last
+    }
+}
+
+private struct CapturingEmailService: EmailService {
+    let captured: CapturedEmails
+
+    func sendVerificationEmail(
+        to email: String,
+        username: String,
+        verificationLink: String,
+        on req: Request
+    ) async throws {
+        await captured.appendVerification(verificationLink)
+    }
+
+    func sendPasswordResetEmail(
+        to email: String,
+        username: String,
+        resetLink: String,
+        on req: Request
+    ) async throws {
+        await captured.appendReset(resetLink)
+    }
+}
+
 final class AuthTests: XCTestCase {
 
     func testRegisterThenProfileThenLogin() async throws {
@@ -34,13 +77,11 @@ final class AuthTests: XCTestCase {
 
     func testRegisterValidationUsernameTooShort() async throws {
         try await withTestApp { app in
-            let inviteCode = try await TestInvite.create(app: app)
             try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
                 try req.content.encode([
                     "username": "ab",
                     "email": "ab_\(UUID().uuidString.prefix(8))@test.com",
-                    "password": "12345678",
-                    "inviteCode": inviteCode
+                    "password": "12345678"
                 ])
             }, afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .badRequest)
@@ -52,13 +93,11 @@ final class AuthTests: XCTestCase {
 
     func testRegisterValidationPasswordTooShort() async throws {
         try await withTestApp { app in
-            let inviteCode = try await TestInvite.create(app: app)
             try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
                 try req.content.encode([
                     "username": "user_\(UUID().uuidString.prefix(8))",
                     "email": "pw_\(UUID().uuidString.prefix(8))@test.com",
-                    "password": "1234567",
-                    "inviteCode": inviteCode
+                    "password": "1234567"
                 ])
             }, afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .badRequest)
@@ -73,13 +112,11 @@ final class AuthTests: XCTestCase {
             let email = "dup_\(UUID().uuidString.prefix(8))@test.com"
             _ = try await TestAuth.register(app: app, email: email)
 
-            let inviteCode = try await TestInvite.create(app: app)
             try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
                 try req.content.encode([
                     "username": "user_\(UUID().uuidString.prefix(8))",
                     "email": email,
-                    "password": "12345678",
-                    "inviteCode": inviteCode
+                    "password": "12345678"
                 ])
             }, afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .conflict)
@@ -94,19 +131,81 @@ final class AuthTests: XCTestCase {
             let username = "dupuser_\(UUID().uuidString.prefix(8))"
             _ = try await TestAuth.register(app: app, username: username)
 
-            let inviteCode = try await TestInvite.create(app: app)
             try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
                 try req.content.encode([
                     "username": username,
                     "email": "new_\(UUID().uuidString.prefix(8))@test.com",
-                    "password": "12345678",
-                    "inviteCode": inviteCode
+                    "password": "12345678"
                 ])
             }, afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .conflict)
                 let err = try res.content.decode(APIErrorResponse.self)
                 XCTAssertTrue(err.reason.lowercased().contains("username"))
             })
+        }
+    }
+
+    func testRegisterCreatesUnverifiedUserAndBlocksLogin() async throws {
+        try await withTestApp { app in
+            let email = "pending_\(UUID().uuidString.prefix(8))@test.com"
+
+            try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "username": "pending_\(UUID().uuidString.prefix(8))",
+                    "email": email,
+                    "password": "12345678"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+                let register = try res.content.decode(RegisterResponse.self)
+                XCTAssertFalse(register.user.emailVerified)
+            })
+
+            try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "email": email,
+                    "password": "12345678"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .forbidden)
+            })
+        }
+    }
+
+    func testVerifyEmailLinkEnablesLogin() async throws {
+        try await withTestApp { app in
+            let captured = CapturedEmails()
+            app.emailService = CapturingEmailService(captured: captured)
+
+            let username = "verify_\(UUID().uuidString.prefix(8))"
+            let email = "verify_\(UUID().uuidString.prefix(8))@test.com"
+            let password = "12345678"
+
+            try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "username": username,
+                    "email": email,
+                    "password": password
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+            })
+
+            let latestVerificationLink = await captured.latestVerification()
+            let verificationLink = try XCTUnwrap(latestVerificationLink)
+            let token = try XCTUnwrap(
+                URLComponents(string: verificationLink)?
+                    .queryItems?
+                    .first(where: { $0.name == "token" })?
+                    .value
+            )
+
+            try await app.test(.GET, "/api/auth/verify-email-link?token=\(token)", afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+            })
+
+            let auth = try await TestAuth.login(app: app, email: email, password: password)
+            XCTAssertTrue(auth.user.emailVerified)
         }
     }
 
@@ -146,6 +245,67 @@ final class AuthTests: XCTestCase {
         try await withTestApp { app in
             try await app.test(.GET, "/api/auth/profile", afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .unauthorized)
+            })
+        }
+    }
+
+    func testForgotAndResetPasswordFlow() async throws {
+        try await withTestApp { app in
+            let captured = CapturedEmails()
+            app.emailService = CapturingEmailService(captured: captured)
+
+            let created = try await TestAuth.register(app: app, password: "12345678")
+
+            try await app.test(.POST, "/api/auth/forgot-password", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "email": created.email
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+            })
+
+            let latestResetLink = await captured.latestReset()
+            let resetLink = try XCTUnwrap(latestResetLink)
+            let token = try XCTUnwrap(
+                URLComponents(string: resetLink)?
+                    .queryItems?
+                    .first(where: { $0.name == "token" })?
+                    .value
+            )
+
+            try await app.test(.POST, "/api/auth/reset-password", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "token": token,
+                    "newPassword": "87654321"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+            })
+
+            try await app.test(.POST, "/api/auth/login", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "email": created.email,
+                    "password": "12345678"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .unauthorized)
+            })
+
+            let auth = try await TestAuth.login(app: app, email: created.email, password: "87654321")
+            XCTAssertFalse(auth.token.isEmpty)
+        }
+    }
+
+    func testForgotPasswordDoesNotRevealUnknownEmail() async throws {
+        try await withTestApp { app in
+            try await app.test(.POST, "/api/auth/forgot-password", beforeRequest: { req async throws in
+                try req.content.encode([
+                    "email": "unknown_\(UUID().uuidString.prefix(8))@test.com"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+                let body = try res.content.decode(AuthMessageResponse.self)
+                XCTAssertTrue(body.message.lowercased().contains("if the account exists"))
             })
         }
     }

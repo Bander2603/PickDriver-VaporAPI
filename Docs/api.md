@@ -31,13 +31,14 @@ curl -H "Authorization: Bearer <token>" \
 ```
 
 ## Recommended authentication flow
-1) POST /api/auth/register (requires inviteCode)
-2) POST /api/auth/login -> JWT token
-3) Send token in Authorization for all remaining protected endpoints
+1) POST /api/auth/register
+2) Verify email from the received link (`GET /api/auth/verify-email-link?token=...`)
+3) POST /api/auth/login -> JWT token
+4) Send token in Authorization for all remaining protected endpoints
 
 Alternative:
-- POST /api/auth/google (Google login/registration; no inviteCode required)
-- POST /api/auth/apple (Apple login/registration; no inviteCode required)
+- POST /api/auth/google (Google login/registration)
+- POST /api/auth/apple (Apple login/registration)
 
 Notes:
 - No refresh token is implemented; once JWT expires, user must log in again.
@@ -48,9 +49,9 @@ Auth:
 - email: max 100, regex-validated, normalized to lowercase
 - password: minimum 8 chars
 - update password: cannot be equal to current password
-- email/password registration requires inviteCode
-- if INVITE_CODE is configured in backend, only that value is accepted
-- if INVITE_CODE is not configured, codes are validated against `invite_codes` table (unused codes)
+- email/password registration starts with `emailVerified=false` until link verification
+- login via email/password is blocked until `emailVerified=true`
+- email verification and password reset use one-time, expiring tokens
 - Google auth requires GOOGLE_CLIENT_ID or GOOGLE_CLIENT_IDS in backend
 - Apple auth requires APPLE_CLIENT_ID or APPLE_CLIENT_IDS in backend
 
@@ -142,19 +143,32 @@ Maintenance notes:
 
 ### Auth
 - POST /api/auth/register
-  - Req: { "username": "user", "email": "a@b.com", "password": "...", "inviteCode": "INVITE" }
-  - Res: { "user": UserPublic }
+  - Req: { "username": "user", "email": "a@b.com", "password": "..." }
+  - Res: { "user": UserPublic, "verificationEmailSent": Bool }
 - POST /api/auth/login
   - Req: { "email": "a@b.com", "password": "..." }
   - Res: { "user": UserPublic, "token": "..." }
+  - Note: returns 403 when email is not verified.
+- POST /api/auth/resend-verification
+  - Req: { "email": "a@b.com" }
+  - Res: { "message": "If the account exists and is pending verification, a verification email has been sent." }
+- GET /api/auth/verify-email-link?token=...
+  - Res: 200 OK (or redirect if `EMAIL_VERIFICATION_SUCCESS_REDIRECT_URL` is configured)
+- POST /api/auth/forgot-password
+  - Req: { "email": "a@b.com" }
+  - Res: { "message": "If the account exists, password reset instructions have been sent." }
+- GET /api/auth/reset-password-link?token=...
+  - Res: 200 OK (or redirect if `PASSWORD_RESET_REDIRECT_URL` is configured)
+- POST /api/auth/reset-password
+  - Req: { "token": "...", "newPassword": "..." }
+  - Res: { "message": "Password updated successfully." }
 - POST /api/auth/google
-  - Req: { "idToken": "...", "inviteCode": "INVITE"? }
+  - Req: { "idToken": "..." }
   - Res: { "user": UserPublic, "token": "..." }
-  - Note: inviteCode is optional (Google flow does not require invitation).
 - POST /api/auth/apple
-  - Req: { "idToken": "...", "email": "a@b.com"?, "firstName": "John"?, "lastName": "Doe"?, "inviteCode": "INVITE"? }
+  - Req: { "idToken": "...", "email": "a@b.com"?, "firstName": "John"?, "lastName": "Doe"? }
   - Res: { "user": UserPublic, "token": "..." }
-  - Note: inviteCode is optional. `email` is a fallback when Apple does not include email in subsequent sign-ins.
+  - Note: `email` is a fallback when Apple does not include email in subsequent sign-ins.
 - GET /api/auth/profile (auth)
   - Res: UserPublic
 - PUT /api/auth/password (auth)

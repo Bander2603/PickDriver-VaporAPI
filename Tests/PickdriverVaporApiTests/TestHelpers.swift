@@ -7,6 +7,7 @@
 
 import XCTVapor
 import SQLKit
+import Fluent
 @testable import PickdriverVaporApi
 
 // MARK: - App lifecycle helper (prevents async teardown races)
@@ -61,7 +62,6 @@ enum TestAuth {
         let u = username ?? "user_\(UUID().uuidString.prefix(8))"
         let e = email ?? "\(UUID().uuidString.prefix(8))@test.com"
         let normalizedEmail = e.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let inviteCode = try await TestInvite.create(app: app)
 
         var token: String = ""
         var publicUser: User.Public?
@@ -70,8 +70,7 @@ enum TestAuth {
             try req.content.encode([
                 "username": u,
                 "email": e,
-                "password": password,
-                "inviteCode": inviteCode
+                "password": password
             ])
         }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
@@ -80,6 +79,15 @@ enum TestAuth {
             XCTAssertEqual(register.user.email, normalizedEmail)
             publicUser = register.user
         })
+
+        // Keep broad integration tests focused on gameplay behavior, not email-verification UX.
+        if let createdUser = try await User.query(on: app.db).filter(\.$email == normalizedEmail).first() {
+            createdUser.emailVerified = true
+            createdUser.emailVerificationTokenHash = nil
+            createdUser.emailVerificationExpiresAt = nil
+            createdUser.emailVerificationSentAt = nil
+            try await createdUser.save(on: app.db)
+        }
 
         let auth = try await login(app: app, email: normalizedEmail, password: password)
         token = auth.token

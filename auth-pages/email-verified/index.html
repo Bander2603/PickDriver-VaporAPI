@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PickDriver - Email Verification</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --card: #111827;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --ok: #22c55e;
+        --error: #ef4444;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: radial-gradient(circle at top, #1e293b 0%, var(--bg) 60%);
+        color: var(--text);
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card {
+        width: 100%;
+        max-width: 520px;
+        background: var(--card);
+        border: 1px solid #1f2937;
+        border-radius: 14px;
+        padding: 24px;
+      }
+      h1 { margin: 0 0 8px; font-size: 24px; }
+      p { margin: 0; color: var(--muted); line-height: 1.5; }
+      .status {
+        margin-top: 16px;
+        font-weight: 700;
+      }
+      .ok { color: var(--ok); }
+      .error { color: var(--error); }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Email Verification</h1>
+      <p id="detail">Checking verification status...</p>
+      <div class="status" id="status"></div>
+    </main>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const status = params.get("status");
+
+      const detail = document.getElementById("detail");
+      const statusEl = document.getElementById("status");
+
+      if (status === "success") {
+        detail.textContent = "Your email has been verified. You can now sign in to PickDriver.";
+        statusEl.textContent = "Verification successful";
+        statusEl.className = "status ok";
+      } else if (status === "invalid") {
+        detail.textContent = "This link is invalid or expired. Request a new verification email from the app.";
+        statusEl.textContent = "Verification failed";
+        statusEl.className = "status error";
+      } else {
+        detail.textContent = "Verification status was not provided. Open the app and request a new verification link if needed.";
+        statusEl.textContent = "Unknown status";
+        statusEl.className = "status error";
+      }
+    </script>
+  </body>
+</html>

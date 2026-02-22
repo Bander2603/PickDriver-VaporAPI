@@ -3,7 +3,8 @@
 Backend API for a fantasy F1 draft league platform. Built with Vapor + Fluent + Postgres, with JWT auth, league/draft logic, standings, and notifications.
 
 ## Highlights
-- JWT auth (email/password) + Google sign-in
+- JWT auth (email/password with verification) + Google/Apple sign-in
+- Email verification + password reset by email links
 - Leagues, teams, drafts, bans, autopicks
 - Standings and race results publishing
 - Notifications and device registration
@@ -48,7 +49,10 @@ See `.env.example` for the full list. Key values:
 - `APPLE_CLIENT_ID` or `APPLE_CLIENT_IDS` (optional; for native app Sign in with Apple)
 - `APNS_ENABLED` (optional; enables APNS delivery when `true`)
 - `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`, `APNS_PRIVATE_KEY_PATH`, `APNS_ENVIRONMENT` (required when `APNS_ENABLED=true`)
-- `INVITE_CODE` (optional)
+- `RESEND_API_KEY` (optional; if missing, email links are only logged server-side)
+- `EMAIL_FROM_ADDRESS`, `EMAIL_FROM_NAME`
+- `EMAIL_VERIFICATION_LINK_BASE_URL`, `EMAIL_VERIFICATION_SUCCESS_REDIRECT_URL`
+- `PASSWORD_RESET_LINK_BASE_URL`, `PASSWORD_RESET_REDIRECT_URL`
 - `ENABLE_INTERNAL_ROUTES` (optional, default `true`)
 - `INTERNAL_SERVICE_TOKEN` (required only when `ENABLE_INTERNAL_ROUTES=true`)
 - `INTERNAL_REQUIRE_HTTPS` (optional; defaults to `true` in production)
