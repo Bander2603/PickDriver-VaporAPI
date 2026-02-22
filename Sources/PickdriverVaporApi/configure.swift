@@ -13,6 +13,15 @@ public func configure(_ app: Application) async throws {
     app.http.server.configuration.port = 3000
     app.startedAt = Date()
     app.appVersion = Environment.get("APP_VERSION")?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "dev"
+    let corsAllowedOrigins = envList("CORS_ALLOWED_ORIGINS")
+    if !corsAllowedOrigins.isEmpty {
+        let corsConfiguration = CORSMiddleware.Configuration(
+            allowedOrigin: .any(corsAllowedOrigins),
+            allowedMethods: [.GET, .POST, .PUT, .PATCH, .DELETE, .OPTIONS],
+            allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith]
+        )
+        app.middleware.use(CORSMiddleware(configuration: corsConfiguration), at: .beginning)
+    }
     app.enableInternalRoutes = envBool("ENABLE_INTERNAL_ROUTES", default: true)
     app.maintenanceMode = envBool("MAINTENANCE_MODE", default: false)
     app.internalRoutesRequireHTTPS = envBool("INTERNAL_REQUIRE_HTTPS", default: app.environment == .production)
