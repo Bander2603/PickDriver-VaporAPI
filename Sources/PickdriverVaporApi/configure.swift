@@ -63,6 +63,38 @@ public func configure(_ app: Application) async throws {
         app.appleClientIDs = []
     }
 
+    if let resendAPIKey = envString("RESEND_API_KEY") {
+        app.emailService = ResendEmailService(
+            apiKey: resendAPIKey,
+            fromEmail: envString("EMAIL_FROM_ADDRESS") ?? "noreply@pickdriver.cc",
+            fromName: envString("EMAIL_FROM_NAME") ?? "PickDriver"
+        )
+    }
+    if let verificationLinkBaseURL = envString("EMAIL_VERIFICATION_LINK_BASE_URL") {
+        app.emailVerificationLinkBaseURL = verificationLinkBaseURL
+    }
+    if let verificationRedirectURL = envString("EMAIL_VERIFICATION_SUCCESS_REDIRECT_URL") {
+        app.emailVerificationSuccessRedirectURL = verificationRedirectURL
+    }
+    if let resetLinkBaseURL = envString("PASSWORD_RESET_LINK_BASE_URL") {
+        app.passwordResetLinkBaseURL = resetLinkBaseURL
+    }
+    if let resetRedirectURL = envString("PASSWORD_RESET_REDIRECT_URL") {
+        app.passwordResetRedirectURL = resetRedirectURL
+    }
+    if let seconds = envDouble("EMAIL_VERIFICATION_EXPIRATION_SECONDS"), seconds > 0 {
+        app.emailVerificationExpiration = seconds
+    }
+    if let seconds = envDouble("EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS"), seconds >= 0 {
+        app.emailVerificationResendInterval = seconds
+    }
+    if let seconds = envDouble("PASSWORD_RESET_EXPIRATION_SECONDS"), seconds > 0 {
+        app.passwordResetExpiration = seconds
+    }
+    if let seconds = envDouble("PASSWORD_RESET_RESEND_INTERVAL_SECONDS"), seconds >= 0 {
+        app.passwordResetResendInterval = seconds
+    }
+
     let apnsEnabled = envBool("APNS_ENABLED", default: false)
     if apnsEnabled {
         guard let keyID = envString("APNS_KEY_ID") else {
@@ -146,6 +178,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateSeasons())
     app.migrations.add(CreateUsers())
     app.migrations.add(AddEmailVerificationToUsers())
+    app.migrations.add(AddPasswordResetToUsers())
     app.migrations.add(AddGoogleIDToUsers())
     app.migrations.add(AddAppleIDToUsers())
     app.migrations.add(AddInviteCodes())
@@ -217,6 +250,13 @@ private func envString(_ key: String) -> String? {
     Environment.get(key)?
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .nonEmpty
+}
+
+private func envDouble(_ key: String) -> Double? {
+    guard let raw = envString(key) else {
+        return nil
+    }
+    return Double(raw)
 }
 
 private func envList(_ key: String) -> [String] {
@@ -407,7 +447,7 @@ extension Application {
     }
 
     var emailVerificationExpiration: Double {
-        get { self.storage[EmailVerificationExpirationKey.self] ?? 1800 } // 30 minutes
+        get { self.storage[EmailVerificationExpirationKey.self] ?? 86400 } // 24 hours
         set { self.storage[EmailVerificationExpirationKey.self] = newValue }
     }
 
@@ -425,7 +465,7 @@ extension Application {
     }
 
     var passwordResetExpiration: Double {
-        get { self.storage[PasswordResetExpirationKey.self] ?? 1800 } // 30 minutes
+        get { self.storage[PasswordResetExpirationKey.self] ?? 3600 } // 1 hour
         set { self.storage[PasswordResetExpirationKey.self] = newValue }
     }
 
