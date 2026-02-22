@@ -43,6 +43,7 @@ swift run
 See `.env.example` for the full list. Key values:
 - `JWT_SECRET` (required)
 - `DATABASE_*` (required)
+- `CORS_ALLOWED_ORIGINS` (optional; comma-separated, recommended in production for browser clients like `https://app.example.com`)
 - `DATABASE_TLS_MODE` (`disable`, `prefer`, `require`)
   - Default is `require` in production, `disable` otherwise
 - `GOOGLE_CLIENT_ID` or `GOOGLE_CLIENT_IDS` (optional; for web+iOS use comma-separated `GOOGLE_CLIENT_IDS`)
