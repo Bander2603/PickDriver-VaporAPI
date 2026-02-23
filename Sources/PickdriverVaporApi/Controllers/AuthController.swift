@@ -80,6 +80,13 @@ private enum AuthPolicy {
     static let maxEmailLength = 100
 }
 
+private enum AccountDeletionPolicy {
+    static let maxPersistedUsernameLength = 50
+    static let usernameSuffix = " (usuario borrado)"
+    static let fallbackUsername = "Usuario"
+    static let deletedEmailDomain = "deleted.pickdriver.local"
+}
+
 struct AuthController: RouteCollection {
     private static let emailRegex = try! NSRegularExpression(
         pattern: "^[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}$",
@@ -111,6 +118,7 @@ struct AuthController: RouteCollection {
         protected.get("profile", use: Self.profileHandler)
         protected.put("password", use: Self.updatePasswordHandler)
         protected.put("username", use: Self.updateUsernameHandler)
+        protected.delete("account", use: Self.deleteAccountHandler)
     }
 
     static func registerHandler(_ req: Request) async throws -> RegisterResponse {
@@ -148,6 +156,10 @@ struct AuthController: RouteCollection {
         let email = normalizeEmail(data.email)
 
         guard let user = try await User.query(on: req.db).filter(\.$email == email).first() else {
+            throw Abort(.unauthorized, reason: "Invalid email or password.")
+        }
+
+        guard user.deletedAt == nil else {
             throw Abort(.unauthorized, reason: "Invalid email or password.")
         }
 
@@ -347,6 +359,108 @@ struct AuthController: RouteCollection {
         return user.convertToPublic()
     }
 
+    static func deleteAccountHandler(_ req: Request) async throws -> HTTPStatus {
+        let authUser = try req.auth.require(User.self)
+        let userID = try authUser.requireID()
+        let now = Date()
+
+        try await req.db.transaction { tx in
+            guard let user = try await User.find(userID, on: tx) else {
+                throw Abort(.notFound, reason: "User not found.")
+            }
+
+            guard user.deletedAt == nil else {
+                return
+            }
+
+            let memberships = try await LeagueMember.query(on: tx)
+                .filter(\.$user.$id == userID)
+                .all()
+
+            let leagueIDs = memberships.map { $0.$league.id }
+            var pendingOwnedLeagueIDs: [Int] = []
+            var pendingMemberLeagueIDs: [Int] = []
+
+            if !leagueIDs.isEmpty {
+                let leagues = try await League.query(on: tx)
+                    .filter(\.$id ~~ leagueIDs)
+                    .all()
+
+                for league in leagues {
+                    guard let leagueID = league.id else { continue }
+                    guard league.status.lowercased() == "pending" else { continue }
+
+                    if league.$creator.id == userID {
+                        pendingOwnedLeagueIDs.append(leagueID)
+                    } else {
+                        pendingMemberLeagueIDs.append(leagueID)
+                    }
+                }
+            }
+
+            if !pendingOwnedLeagueIDs.isEmpty {
+                let ownedPendingLeagues = try await League.query(on: tx)
+                    .filter(\.$id ~~ pendingOwnedLeagueIDs)
+                    .all()
+
+                for league in ownedPendingLeagues {
+                    try await league.delete(on: tx)
+                }
+            }
+
+            if !pendingMemberLeagueIDs.isEmpty {
+                let pendingTeamIDs = try await LeagueTeam.query(on: tx)
+                    .filter(\.$league.$id ~~ pendingMemberLeagueIDs)
+                    .all()
+                    .compactMap(\.id)
+
+                if !pendingTeamIDs.isEmpty {
+                    try await TeamMember.query(on: tx)
+                        .filter(\.$user.$id == userID)
+                        .filter(\.$team.$id ~~ pendingTeamIDs)
+                        .delete()
+                }
+
+                try await LeagueMember.query(on: tx)
+                    .filter(\.$user.$id == userID)
+                    .filter(\.$league.$id ~~ pendingMemberLeagueIDs)
+                    .delete()
+            }
+
+            try await PlayerAutopick.query(on: tx)
+                .filter(\.$user.$id == userID)
+                .delete()
+
+            let pushTokens = try await PushToken.query(on: tx)
+                .filter(\.$user.$id == userID)
+                .all()
+
+            for token in pushTokens {
+                token.isActive = false
+                token.lastSeenAt = now
+                try await token.save(on: tx)
+            }
+
+            user.username = makeDeletedUsername(from: user.username)
+            user.email = makeDeletedEmail(for: userID, at: now)
+            user.passwordHash = try Bcrypt.hash("deleted-\(UUID().uuidString)-\(generateTokenString())")
+            user.emailVerified = false
+            user.googleID = nil
+            user.appleID = nil
+            user.emailVerificationTokenHash = nil
+            user.emailVerificationExpiresAt = nil
+            user.emailVerificationSentAt = nil
+            user.passwordResetTokenHash = nil
+            user.passwordResetExpiresAt = nil
+            user.passwordResetSentAt = nil
+            user.deletedAt = now
+
+            try await user.save(on: tx)
+        }
+
+        return .ok
+    }
+
     static func googleAuthHandler(_ req: Request) async throws -> AuthResponse {
         let data = try req.content.decode(GoogleAuthRequest.self)
         let idToken = data.idToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -357,12 +471,18 @@ struct AuthController: RouteCollection {
         let tokenInfo = try await verifyGoogleIDToken(idToken, on: req)
         let normalizedEmail = normalizeEmail(tokenInfo.email)
 
-        if let user = try await User.query(on: req.db).filter(\.$googleID == tokenInfo.sub).first() {
+        if let user = try await User.query(on: req.db)
+            .filter(\.$googleID == tokenInfo.sub)
+            .filter(\.$deletedAt == nil)
+            .first() {
             let token = try generateToken(for: user, on: req)
             return AuthResponse(user: user.convertToPublic(), token: token)
         }
 
-        if let user = try await User.query(on: req.db).filter(\.$email == normalizedEmail).first() {
+        if let user = try await User.query(on: req.db)
+            .filter(\.$email == normalizedEmail)
+            .filter(\.$deletedAt == nil)
+            .first() {
             user.googleID = tokenInfo.sub
             user.emailVerified = true
             user.emailVerificationTokenHash = nil
@@ -397,7 +517,10 @@ struct AuthController: RouteCollection {
         let tokenInfo = try await verifyAppleIDToken(idToken, on: req)
         let appleSubject = tokenInfo.subject.value
 
-        if let user = try await User.query(on: req.db).filter(\.$appleID == appleSubject).first() {
+        if let user = try await User.query(on: req.db)
+            .filter(\.$appleID == appleSubject)
+            .filter(\.$deletedAt == nil)
+            .first() {
             let token = try generateToken(for: user, on: req)
             return AuthResponse(user: user.convertToPublic(), token: token)
         }
@@ -417,7 +540,10 @@ struct AuthController: RouteCollection {
             throw Abort(.badRequest, reason: "Email format is invalid.")
         }
 
-        if let user = try await User.query(on: req.db).filter(\.$email == normalizedEmail).first() {
+        if let user = try await User.query(on: req.db)
+            .filter(\.$email == normalizedEmail)
+            .filter(\.$deletedAt == nil)
+            .first() {
             user.appleID = appleSubject
             user.emailVerified = true
             user.emailVerificationTokenHash = nil
@@ -741,6 +867,19 @@ struct AuthController: RouteCollection {
         }
 
         return candidate
+    }
+
+    private static func makeDeletedUsername(from current: String) -> String {
+        let normalized = normalizeUsername(current)
+        let base = normalized.isEmpty ? AccountDeletionPolicy.fallbackUsername : normalized
+        let maxBaseLength = max(1, AccountDeletionPolicy.maxPersistedUsernameLength - AccountDeletionPolicy.usernameSuffix.count)
+        let trimmedBase = String(base.prefix(maxBaseLength))
+        return "\(trimmedBase)\(AccountDeletionPolicy.usernameSuffix)"
+    }
+
+    private static func makeDeletedEmail(for userID: Int, at date: Date) -> String {
+        let timestamp = Int(date.timeIntervalSince1970)
+        return "deleted+\(userID)+\(timestamp)@\(AccountDeletionPolicy.deletedEmailDomain)"
     }
 
     private static func generateTokenString() -> String {

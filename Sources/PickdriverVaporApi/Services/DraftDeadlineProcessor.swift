@@ -96,17 +96,26 @@ struct DraftDeadlineProcessor {
         let firstHalfCount = (pickOrder.count + 1) / 2
 
         while index < pickOrder.count {
-            let deadline = index < firstHalfCount ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
-            if now <= deadline { break }
             let currentTurnUserID = pickOrder[index]
+            let deletedUser = try await isDeletedUser(userID: currentTurnUserID, sql: sql)
+            let deadline = index < firstHalfCount ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
+
+            if !deletedUser && now <= deadline {
+                break
+            }
+
             let isMirrorPick = mirrorPicks && pickOrder.prefix(index).contains(currentTurnUserID)
-            _ = try await attemptAutopick(
-                draftID: draftID,
-                leagueID: leagueID,
-                userID: currentTurnUserID,
-                isMirrorPick: isMirrorPick,
-                sql: sql
-            )
+
+            if !deletedUser {
+                _ = try await attemptAutopick(
+                    draftID: draftID,
+                    leagueID: leagueID,
+                    userID: currentTurnUserID,
+                    isMirrorPick: isMirrorPick,
+                    sql: sql
+                )
+            }
+
             index += 1
             advanced = true
         }
@@ -122,6 +131,20 @@ struct DraftDeadlineProcessor {
         }
 
         return currentPickIndex
+    }
+
+    private static func isDeletedUser(
+        userID: Int,
+        sql: any SQLDatabase
+    ) async throws -> Bool {
+        let row = try await sql.raw("""
+            SELECT 1 FROM users
+            WHERE id = \(bind: userID)
+              AND deleted_at IS NOT NULL
+            LIMIT 1
+        """).first()
+
+        return row != nil
     }
 
     private static func attemptAutopick(

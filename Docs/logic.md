@@ -7,6 +7,17 @@ This document summarizes the actual rules implemented in the API for leagues, dr
 - All league/draft/pick routes require JWT (Authorization: Bearer).
 - Validations are enforced at runtime; there are no hidden rules outside the codebase.
 
+## Account deletion
+- Endpoint: `DELETE /api/auth/account` (authenticated).
+- Deletion is soft-delete (`users.deleted_at`), not hard-delete, to preserve draft/history integrity.
+- Pending leagues:
+  - if user is owner, the league is deleted
+  - if user is member, membership is removed (slot is freed)
+- Active leagues:
+  - membership is preserved
+  - username is anonymized with a deleted-user tag for display continuity
+- Deleted users cannot authenticate again with existing JWTs.
+
 ## Trademark notice
 This project is independent and is not affiliated with or endorsed by Formula 1, the FIA, or related entities. No official logos or brand assets are used. “Formula 1”, “F1”, and related marks belong to their respective owners and are referenced for descriptive purposes only.
 
@@ -82,6 +93,7 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
   - not banned by that user
   - not already picked by another player
 - If no valid autopick exists, turn expires and flow advances anyway.
+- If a turn belongs to a deleted user, it is always treated as missed pick and skipped immediately.
 
 ## Picks
 ### Access rules

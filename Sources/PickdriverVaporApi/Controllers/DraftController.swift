@@ -195,6 +195,17 @@ struct DraftController: RouteCollection {
         
         draft.currentPickIndex += 1
         try await draft.save(on: req.db)
+
+        draft.currentPickIndex = try await DraftDeadlineProcessor.advanceExpiredTurns(
+            draftID: draftID,
+            leagueID: leagueID,
+            pickOrder: draft.pickOrder,
+            currentPickIndex: draft.currentPickIndex,
+            mirrorPicks: draft.mirrorPicks,
+            deadlines: deadlines,
+            now: now,
+            sql: sql
+        )
         
         let nextUserID = draft.currentPickIndex < pickOrder.count ? pickOrder[draft.currentPickIndex] : nil
         if let nextUserID {
@@ -451,6 +462,17 @@ struct DraftController: RouteCollection {
         
         draft.currentPickIndex = targetIndex
         try await draft.save(on: req.db)
+
+        draft.currentPickIndex = try await DraftDeadlineProcessor.advanceExpiredTurns(
+            draftID: draftID,
+            leagueID: leagueID,
+            pickOrder: draft.pickOrder,
+            currentPickIndex: draft.currentPickIndex,
+            mirrorPicks: draft.mirrorPicks,
+            deadlines: deadlines,
+            now: now,
+            sql: sql
+        )
 
         if let nextUserID = draft.pickOrder[safe: draft.currentPickIndex] {
             try await NotificationService.notifyDraftTurn(
