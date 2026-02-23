@@ -86,3 +86,30 @@ struct RemoveFirebaseUIDFromUsers: AsyncMigration {
             """).run()
     }
 }
+
+struct AddDeletedAtToUsers: AsyncMigration {
+    func prepare(on database: any Database) async throws {
+        guard let sql = database as? (any SQLDatabase) else {
+            throw Abort(.internalServerError, reason: "This migration requires an SQLDatabase (Postgres).")
+        }
+
+        try await sql.raw("""
+            ALTER TABLE public.users
+            ADD COLUMN IF NOT EXISTS deleted_at timestamp without time zone
+            """).run()
+
+        try await sql.raw("""
+            CREATE INDEX IF NOT EXISTS idx_users_deleted_at
+            ON public.users USING btree (deleted_at)
+            """).run()
+    }
+
+    func revert(on database: any Database) async throws {
+        guard let sql = database as? (any SQLDatabase) else {
+            throw Abort(.internalServerError, reason: "This migration requires an SQLDatabase (Postgres).")
+        }
+
+        try await sql.raw("DROP INDEX IF EXISTS public.idx_users_deleted_at").run()
+        try await sql.raw("ALTER TABLE public.users DROP COLUMN IF EXISTS deleted_at").run()
+    }
+}

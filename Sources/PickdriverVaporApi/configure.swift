@@ -192,6 +192,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddAppleIDToUsers())
     app.migrations.add(AddInviteCodes())
     app.migrations.add(RemoveFirebaseUIDFromUsers())
+    app.migrations.add(AddDeletedAtToUsers())
 
     // F1 domain
     app.migrations.add(CreateF1Teams())

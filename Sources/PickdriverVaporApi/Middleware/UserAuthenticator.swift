@@ -37,6 +37,11 @@ struct UserAuthenticator: AsyncMiddleware {
             throw Abort(.unauthorized, reason: "User not found")
         }
 
+        guard user.deletedAt == nil else {
+            request.logger.warning("Auth: deleted user attempted authentication", metadata: ["user_id": "\(userId)"])
+            throw Abort(.unauthorized, reason: "Account has been deleted")
+        }
+
         request.auth.login(user)
         request.logger.info("Auth: user authenticated", metadata: ["user_id": "\(userId)"])
 

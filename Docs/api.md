@@ -54,6 +54,10 @@ Auth:
 - email verification and password reset use one-time, expiring tokens
 - Google auth requires GOOGLE_CLIENT_ID or GOOGLE_CLIENT_IDS in backend
 - Apple auth requires APPLE_CLIENT_ID or APPLE_CLIENT_IDS in backend
+- `DELETE /api/auth/account` performs a soft-delete:
+  - pending leagues: user is removed; if owner, pending league is deleted
+  - active leagues: membership is kept and username is marked as deleted
+  - deleted accounts cannot authenticate again with existing JWTs
 
 Leagues and teams:
 - League creation requires an active season.
@@ -77,6 +81,7 @@ Draft:
 - Remaining bans: 2 per user (no teams) or 3 per team (teams enabled).
 - Per-race limit: each user/team can use 1 ban per race; in no-team leagues, a player can only be banned once per race.
 - Autopick: if list exists and turn expires, automatic pick is attempted.
+- Deleted users are always auto-skipped as missed pick when their turn arrives.
 
 Notifications:
 - GET /api/notifications: default limit 50, max 100, unread_only default false.
@@ -177,6 +182,9 @@ Maintenance notes:
 - PUT /api/auth/username (auth)
   - Req: { "username": "new_name" }
   - Res: UserPublic
+- DELETE /api/auth/account (auth)
+  - Res: 200 OK
+  - Note: soft-delete account; pending memberships are removed and active league history is preserved.
 
 ### Races (public)
 - GET /api/races

@@ -51,6 +51,9 @@ final class User: Model, @unchecked Sendable, Authenticatable {
     @OptionalField(key: "password_reset_sent_at")
     var passwordResetSentAt: Date?
 
+    @OptionalField(key: "deleted_at")
+    var deletedAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
