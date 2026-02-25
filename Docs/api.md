@@ -58,6 +58,7 @@ Auth:
   - pending leagues: user is removed; if owner, pending league is deleted
   - active leagues: membership is kept and username is marked as deleted
   - deleted accounts cannot authenticate again with existing JWTs
+  - Google/Apple login does not restore a deleted account with the same email
 
 Leagues and teams:
 - League creation requires an active season.
@@ -185,6 +186,11 @@ Maintenance notes:
 - DELETE /api/auth/account (auth)
   - Res: 200 OK
   - Note: soft-delete account; pending memberships are removed and active league history is preserved.
+
+Client integration notes (iOS/Web):
+- On `200 OK`, immediately sign out locally and clear stored auth/session state.
+- Any later call with the old bearer token should be handled as expected `401 Unauthorized`.
+- League screens should tolerate members that remain in active leagues but are marked as deleted.
 
 ### Races (public)
 - GET /api/races
