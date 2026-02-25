@@ -115,6 +115,12 @@ swift test --filter PickDriverVaultTests -v
 ## Docs
 - `docs/api.md`: endpoint list and contract
 - `docs/logic.md`: business rules
+- `docs/migrations.md`: migration operations and deployment checklist
+
+Quick pointers:
+- iOS/Web integration for account deletion: see `DELETE /api/auth/account` notes in `docs/api.md`.
+- Account-deletion business behavior (`pending` vs `active` leagues): see `docs/logic.md`.
+- Release requirement for account deletion: apply migrations (including `AddDeletedAtToUsers`) as described in `docs/migrations.md`.
 
 ## Trademarks
 This project is unofficial and not affiliated with, endorsed by, or sponsored by Formula 1, the FIA, or any related entities. It does not use any official logos or brand assets. “Formula 1”, “F1”, and related marks are trademarks of their respective owners and are used here only for descriptive purposes.
