@@ -11,11 +11,16 @@ This document summarizes the actual rules implemented in the API for leagues, dr
 - Endpoint: `DELETE /api/auth/account` (authenticated).
 - Deletion is soft-delete (`users.deleted_at`), not hard-delete, to preserve draft/history integrity.
 - Pending leagues:
-  - if user is owner, the league is deleted
-  - if user is member, membership is removed (slot is freed)
+  - if user is owner, the pending league is deleted automatically
+  - if user is a non-owner member, membership is removed (slot is freed)
 - Active leagues:
   - membership is preserved
-  - username is anonymized with a deleted-user tag for display continuity
+  - username is anonymized with a deleted-user label (`(usuario borrado)`) for display continuity
+- Credentials and identity links are invalidated on deletion:
+  - password hash is replaced
+  - Google/Apple IDs are removed
+  - verification/reset tokens are cleared
+  - push tokens are deactivated
 - Deleted users cannot authenticate again with existing JWTs.
 
 ## Trademark notice

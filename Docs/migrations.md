@@ -65,6 +65,32 @@ pm2 restart vapor-api
 
 ---
 
+## Account Deletion Migration
+
+The account-deletion feature introduces:
+- migration: `AddDeletedAtToUsers`
+- schema changes:
+  - `users.deleted_at` (`timestamp without time zone`, nullable)
+  - index `idx_users_deleted_at`
+
+Deployment requirement:
+- run migrations before (or as part of) API rollout so `DELETE /api/auth/account` works correctly.
+
+Verification query:
+```sql
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema='public' AND table_name='users' AND column_name='deleted_at';
+```
+
+```sql
+SELECT indexname
+FROM pg_indexes
+WHERE schemaname='public' AND tablename='users' AND indexname='idx_users_deleted_at';
+```
+
+---
+
 ## Rules / Best Practices
 
 - **Never modify** a migration that has already run on production.
@@ -192,4 +218,3 @@ Fluent uses `_fluent_migrations` (with underscore) in this setup:
 ```sql
 SELECT * FROM public._fluent_migrations;
 ```
-
