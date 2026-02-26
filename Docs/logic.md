@@ -140,6 +140,9 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 - Marks pick as banned (`is_banned = true`) and stores `banned_by`.
 - Moves `currentPickIndex` back to previous pick so user can re-pick.
 - Notifies next player after state change.
+- Draft detail (`GET /api/leagues/:leagueID/draft/:raceID`) exposes:
+  - `bannedByUserIDsByPickIndex` (who executed each visible ban slot)
+  - `bansUsedByUserID` / `bansUsedByTeamID` + `banLimitPerActor` (ban usage metadata for UI)
 
 ## Standings and scoring
 - Only non-banned picks are counted.

@@ -72,6 +72,10 @@ final class DraftPickTests: XCTestCase {
         let pickedDriverIDs: [Int?]
         let bannedDriverIDs: [Int]
         let bannedDriverIDsByPickIndex: [Int?]
+        let bannedByUserIDsByPickIndex: [Int?]
+        let bansUsedByUserID: [String: Int]
+        let bansUsedByTeamID: [String: Int]
+        let banLimitPerActor: Int
     }
 
     // MARK: - Helpers (API)
@@ -858,6 +862,61 @@ final class DraftPickTests: XCTestCase {
             XCTAssertEqual(draft.bannedDriverIDsByPickIndex[0], firstPick)
             XCTAssertNil(draft.bannedDriverIDsByPickIndex[1])
             XCTAssertNil(draft.bannedDriverIDsByPickIndex[2])
+            XCTAssertEqual(draft.bannedByUserIDsByPickIndex.count, order.count)
+            XCTAssertEqual(draft.bannedByUserIDsByPickIndex[0], secondUserID)
+            XCTAssertNil(draft.bannedByUserIDsByPickIndex[1])
+            XCTAssertNil(draft.bannedByUserIDsByPickIndex[2])
+            XCTAssertEqual(draft.banLimitPerActor, 2)
+            XCTAssertEqual(draft.bansUsedByUserID[String(firstUserID)], 0)
+            XCTAssertEqual(draft.bansUsedByUserID[String(secondUserID)], 1)
+            XCTAssertEqual(draft.bansUsedByUserID[String(order[2])], 0)
+            XCTAssertTrue(draft.bansUsedByTeamID.isEmpty)
+        }
+    }
+
+    func testGetRaceDraftReturnsBanUsageByTeamInTeamLeague() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedTeamDraft4Players(app: app)
+
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertEqual(order.count, 4)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+
+            let firstPick = seeded.driverIDs[0]
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: firstPick,
+                expectedStatus: .ok
+            )
+
+            _ = try await banPick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: firstUserID,
+                driverID: firstPick,
+                expectedStatus: .ok
+            )
+
+            let draft = try await getRaceDraft(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+
+            let secondTeamID = try XCTUnwrap(seeded.teamByUser[secondUserID])
+            let firstTeamID = try XCTUnwrap(seeded.teamByUser[firstUserID])
+
+            XCTAssertEqual(draft.banLimitPerActor, 3)
+            XCTAssertEqual(draft.bannedByUserIDsByPickIndex[0], secondUserID)
+            XCTAssertEqual(draft.bansUsedByUserID[String(secondUserID)], 1)
+            XCTAssertEqual(draft.bansUsedByUserID[String(firstUserID)], 0)
+            XCTAssertEqual(draft.bansUsedByTeamID[String(secondTeamID)], 1)
+            XCTAssertEqual(draft.bansUsedByTeamID[String(firstTeamID)], 0)
         }
     }
 

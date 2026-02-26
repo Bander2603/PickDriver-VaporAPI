@@ -492,6 +492,10 @@ struct LeagueController: RouteCollection {
         let pickedDriverIDs: [Int?]
         let bannedDriverIDs: [Int]
         let bannedDriverIDsByPickIndex: [Int?]
+        let bannedByUserIDsByPickIndex: [Int?]
+        let bansUsedByUserID: [String: Int]
+        let bansUsedByTeamID: [String: Int]
+        let banLimitPerActor: Int
     }
 
     func getRaceDraft(_ req: Request) async throws -> RaceDraftResponse {
@@ -501,7 +505,7 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid leagueID/raceID.")
         }
 
-        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
 
         guard let draft = try await RaceDraft.query(on: req.db)
             .filter(\.$league.$id == leagueID)
@@ -526,9 +530,15 @@ struct LeagueController: RouteCollection {
             let user_id: Int
             let driver_id: Int
             let is_mirror_pick: Bool
+            let banned_by: Int?
             let banned_at: Date?
             let picked_at: Date?
             let id: Int
+        }
+
+        struct TeamMemberRow: Decodable {
+            let user_id: Int
+            let team_id: Int
         }
 
         struct PickKey: Hashable {
@@ -544,7 +554,7 @@ struct LeagueController: RouteCollection {
         """).all(decoding: PickRow.self)
 
         let bannedRows = try await sql.raw("""
-            SELECT id, user_id, driver_id, is_mirror_pick, banned_at, picked_at
+            SELECT id, user_id, driver_id, is_mirror_pick, banned_by, banned_at, picked_at
             FROM player_picks
             WHERE draft_id = \(bind: draftID)
               AND is_banned = true
@@ -557,21 +567,35 @@ struct LeagueController: RouteCollection {
             picksByKey[PickKey(userID: row.user_id, isMirrorPick: row.is_mirror_pick)] = row.driver_id
         }
 
-        var bannedByKey: [PickKey: Int] = [:]
-        bannedByKey.reserveCapacity(bannedRows.count)
+        let pickOrder = draft.pickOrder
+        let uniqueUserIDs = Set(pickOrder)
+
+        var bannedByDriverKey: [PickKey: Int] = [:]
+        bannedByDriverKey.reserveCapacity(bannedRows.count)
+        var bannedByUserKey: [PickKey: Int] = [:]
+        bannedByUserKey.reserveCapacity(bannedRows.count)
         var bannedDriverIDSet = Set<Int>()
         bannedDriverIDSet.reserveCapacity(bannedRows.count)
+        var bansUsedByUserID = Dictionary(uniqueKeysWithValues: uniqueUserIDs.map { ($0, 0) })
+        bansUsedByUserID.reserveCapacity(uniqueUserIDs.count)
+
         for row in bannedRows {
             let key = PickKey(userID: row.user_id, isMirrorPick: row.is_mirror_pick)
-            if bannedByKey[key] == nil {
-                bannedByKey[key] = row.driver_id
+            if bannedByDriverKey[key] == nil {
+                bannedByDriverKey[key] = row.driver_id
+                if let bannedBy = row.banned_by {
+                    bannedByUserKey[key] = bannedBy
+                }
             }
             bannedDriverIDSet.insert(row.driver_id)
+            if let bannedBy = row.banned_by {
+                bansUsedByUserID[bannedBy, default: 0] += 1
+            }
         }
 
-        let pickOrder = draft.pickOrder
         var pickedDriverIDs = Array<Int?>(repeating: nil, count: pickOrder.count)
         var bannedDriverIDsByPickIndex = Array<Int?>(repeating: nil, count: pickOrder.count)
+        var bannedByUserIDsByPickIndex = Array<Int?>(repeating: nil, count: pickOrder.count)
         var seenUsers = Set<Int>()
         seenUsers.reserveCapacity(pickOrder.count)
 
@@ -581,13 +605,45 @@ struct LeagueController: RouteCollection {
             if let driverID = picksByKey[key] {
                 pickedDriverIDs[index] = driverID
             }
-            if let bannedDriverID = bannedByKey[key] {
+            if let bannedDriverID = bannedByDriverKey[key] {
                 bannedDriverIDsByPickIndex[index] = bannedDriverID
+            }
+            if let bannedByUserID = bannedByUserKey[key] {
+                bannedByUserIDsByPickIndex[index] = bannedByUserID
             }
             seenUsers.insert(userID)
         }
 
+        var bansUsedByTeamID: [String: Int] = [:]
+        if league.teamsEnabled {
+            let teamMemberRows = try await sql.raw("""
+                SELECT tm.user_id, tm.team_id
+                FROM team_members tm
+                JOIN league_teams lt ON lt.id = tm.team_id
+                WHERE lt.league_id = \(bind: leagueID)
+            """).all(decoding: TeamMemberRow.self)
+
+            var teamIDByUserID: [Int: Int] = [:]
+            teamIDByUserID.reserveCapacity(teamMemberRows.count)
+            for row in teamMemberRows {
+                teamIDByUserID[row.user_id] = row.team_id
+            }
+
+            let teamIDsInOrder = Set(uniqueUserIDs.compactMap { teamIDByUserID[$0] })
+            bansUsedByTeamID = Dictionary(uniqueKeysWithValues: teamIDsInOrder.map { (String($0), 0) })
+            bansUsedByTeamID.reserveCapacity(teamIDsInOrder.count)
+
+            for row in bannedRows {
+                guard let bannedBy = row.banned_by, let teamID = teamIDByUserID[bannedBy] else {
+                    continue
+                }
+                bansUsedByTeamID[String(teamID), default: 0] += 1
+            }
+        }
+
         let bannedDriverIDs = bannedDriverIDSet.sorted()
+        let bansUsedByUserIDStringKey = Dictionary(uniqueKeysWithValues: bansUsedByUserID.map { (String($0.key), $0.value) })
+        let banLimitPerActor = league.teamsEnabled ? 3 : 2
 
         return RaceDraftResponse(
             id: draftID,
@@ -599,7 +655,11 @@ struct LeagueController: RouteCollection {
             status: draft.status,
             pickedDriverIDs: pickedDriverIDs,
             bannedDriverIDs: bannedDriverIDs,
-            bannedDriverIDsByPickIndex: bannedDriverIDsByPickIndex
+            bannedDriverIDsByPickIndex: bannedDriverIDsByPickIndex,
+            bannedByUserIDsByPickIndex: bannedByUserIDsByPickIndex,
+            bansUsedByUserID: bansUsedByUserIDStringKey,
+            bansUsedByTeamID: bansUsedByTeamID,
+            banLimitPerActor: banLimitPerActor
         )
     }
 
