@@ -81,6 +81,7 @@ Draft:
 - Last player in order cannot be banned (unless also first).
 - Remaining bans: 2 per user (no teams) or 3 per team (teams enabled).
 - Per-race limit: each user/team can use 1 ban per race; in no-team leagues, a player can only be banned once per race.
+- `GET /api/leagues/:leagueID/draft/:raceID` exposes ban attribution and usage counters (`bannedByUserIDsByPickIndex`, `bansUsedByUserID`, `bansUsedByTeamID`, `banLimitPerActor`).
 - Autopick: if list exists and turn expires, automatic pick is attempted.
 - Deleted users are always auto-skipped as missed pick when their turn arrives.
 
@@ -239,7 +240,7 @@ Client integration notes (iOS/Web):
 - GET /api/leagues/:leagueID/draft/:raceID/pick-order
   - Res: [Int] (user IDs)
 - GET /api/leagues/:leagueID/draft/:raceID
-  - Res: RaceDraft (includes pickedDriverIDs, bannedDriverIDs and bannedDriverIDsByPickIndex)
+  - Res: RaceDraft (includes pickedDriverIDs, bannedDriverIDs, bannedDriverIDsByPickIndex, bannedByUserIDsByPickIndex and ban usage counters)
 - GET /api/leagues/:leagueID/draft/:raceID/deadlines
   - Res: DraftDeadline
 - GET /api/leagues/:leagueID/autopick
@@ -317,10 +318,14 @@ F1Team:
 { "id": Int, "seasonID": Int, "name": String, "color": String }
 
 RaceDraft:
-{ "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String, "pickedDriverIDs": [Int?], "bannedDriverIDs": [Int], "bannedDriverIDsByPickIndex": [Int?] }
+{ "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String, "pickedDriverIDs": [Int?], "bannedDriverIDs": [Int], "bannedDriverIDsByPickIndex": [Int?], "bannedByUserIDsByPickIndex": [Int?], "bansUsedByUserID": { "<userID>": Int }, "bansUsedByTeamID": { "<teamID>": Int }, "banLimitPerActor": Int }
   - pickedDriverIDs is aligned with pickOrder (same length), with null where no active pick exists or pick was banned.
   - bannedDriverIDs includes all driver_id values with is_banned = true in the draft.
   - bannedDriverIDsByPickIndex is aligned with pickOrder (same length); contains the last banned driver for that slot or null if none.
+  - bannedByUserIDsByPickIndex is aligned with pickOrder (same length); contains the `user_id` that executed the ban for that slot or null.
+  - bansUsedByUserID includes all users in pickOrder, with number of bans used in the race draft.
+  - bansUsedByTeamID is empty in non-team leagues; in team leagues it includes all teams present in pickOrder.
+  - banLimitPerActor is 2 (non-team leagues) or 3 (team leagues).
 
 DraftDeadline:
 { "raceID": Int, "leagueID": Int, "firstHalfDeadline": Date, "secondHalfDeadline": Date }
