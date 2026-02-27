@@ -72,10 +72,9 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "League creation limit reached. You can only have 3 pending or active leagues.")
         }
 
-        let code = generateUniqueCode()
-
-        do {
-            return try await req.db.transaction { tx in
+        func runCreateLeagueTransaction() async throws -> League.Public {
+            try await req.db.transaction { tx in
+                let code = generateUniqueCode()
                 let league = League(
                     name: data.name,
                     code: code,
@@ -95,12 +94,26 @@ struct LeagueController: RouteCollection {
 
                 return league.convertToPublic()
             }
-        } catch let psql as PSQLError
-            where psql.serverInfo?[.sqlState] == "23505" {
-            throw Abort(
-                .conflict,
-                reason: "Database sequence mismatch detected. Please run sequence resync for table league_members."
-            )
+        }
+
+        do {
+            return try await runCreateLeagueTransaction()
+        } catch let psql as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(psql) {
+            req.logger.warning("league_members sequence mismatch detected during createLeague; attempting automatic sequence resync.")
+            try await resyncLeagueMembersSequence(on: req.db)
+
+            do {
+                return try await runCreateLeagueTransaction()
+            } catch let retryPSQL as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(retryPSQL) {
+                throw Abort(
+                    .conflict,
+                    reason: "Database sequence mismatch detected. Auto-repair was attempted for league_members but create league still failed. Please retry."
+                )
+            } catch let retryInvitePSQL as PSQLError where isInviteCodeConflict(retryInvitePSQL) {
+                throw Abort(.conflict, reason: "Generated invite code collided. Please try creating the league again.")
+            }
+        } catch let psql as PSQLError where isInviteCodeConflict(psql) {
+            throw Abort(.conflict, reason: "Generated invite code collided. Please try creating the league again.")
         }
     }
 
@@ -709,8 +722,74 @@ func joinLeague(_ req: Request) async throws -> League.Public {
         throw Abort(.conflict, reason: "League is already full.")
     }
 
-    let member = LeagueMember(userID: try user.requireID(), leagueID: try league.requireID())
-    try await member.save(on: req.db)
+    try await saveLeagueMemberWithSequenceRecovery(
+        userID: try user.requireID(),
+        leagueID: try league.requireID(),
+        on: req.db,
+        logger: req.logger
+    )
 
     return league.convertToPublic()
+}
+
+private func saveLeagueMemberWithSequenceRecovery(
+    userID: Int,
+    leagueID: Int,
+    on database: any Database,
+    logger: Logger
+) async throws {
+    do {
+        let member = LeagueMember(userID: userID, leagueID: leagueID)
+        try await member.save(on: database)
+    } catch let psql as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(psql) {
+        logger.warning("league_members sequence mismatch detected; attempting automatic sequence resync.")
+        try await resyncLeagueMembersSequence(on: database)
+
+        do {
+            let member = LeagueMember(userID: userID, leagueID: leagueID)
+            try await member.save(on: database)
+        } catch let retryPSQL as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(retryPSQL) {
+            throw Abort(
+                .conflict,
+                reason: "Database sequence mismatch detected. Auto-repair was attempted for league_members but insert still failed. Please retry."
+            )
+        }
+    }
+}
+
+private func resyncLeagueMembersSequence(on database: any Database) async throws {
+    guard let sql = database as? (any SQLDatabase) else {
+        throw Abort(.internalServerError, reason: "SQLDatabase required to recover league_members sequence.")
+    }
+
+    try await sql.raw("""
+        SELECT setval(
+            pg_get_serial_sequence('public.league_members', 'id'),
+            COALESCE((SELECT MAX(id) FROM public.league_members), 0) + 1,
+            false
+        )
+    """).run()
+}
+
+private func isLeagueMembersPrimaryKeySequenceConflict(_ error: PSQLError) -> Bool {
+    guard error.serverInfo?[.sqlState] == "23505" else {
+        return false
+    }
+
+    let constraint = error.serverInfo?[.constraintName]?.lowercased() ?? ""
+    if constraint == "league_members_pkey" {
+        return true
+    }
+
+    let table = error.serverInfo?[.tableName]?.lowercased() ?? ""
+    let detail = error.serverInfo?[.detail]?.lowercased() ?? ""
+    return table == "league_members" && detail.contains("(id)")
+}
+
+private func isInviteCodeConflict(_ error: PSQLError) -> Bool {
+    guard error.serverInfo?[.sqlState] == "23505" else {
+        return false
+    }
+
+    return (error.serverInfo?[.constraintName]?.lowercased() ?? "") == "leagues_invite_code_key"
 }

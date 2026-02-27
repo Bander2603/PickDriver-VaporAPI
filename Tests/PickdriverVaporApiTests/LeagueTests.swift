@@ -7,6 +7,7 @@
 
 import XCTVapor
 import Fluent
+import SQLKit
 import Vapor
 @testable import PickdriverVaporApi
 
@@ -76,6 +77,25 @@ final class LeagueTests: XCTestCase {
         return try XCTUnwrap(league)
     }
 
+    private func forceLeagueMembersSequence(
+        app: Application,
+        to value: Int,
+        isCalled: Bool = false
+    ) async throws {
+        guard let sql = app.db as? (any SQLDatabase) else {
+            XCTFail("Expected SQLDatabase for sequence manipulation")
+            return
+        }
+
+        try await sql.raw("""
+            SELECT setval(
+                pg_get_serial_sequence('public.league_members', 'id'),
+                \(bind: value),
+                \(bind: isCalled)
+            )
+        """).run()
+    }
+
     // MARK: - Tests
 
     func testCreateLeagueAddsCreatorAsMember_andIsReturnedInMyLeagues() async throws {
@@ -122,6 +142,46 @@ final class LeagueTests: XCTestCase {
                 .first()
 
             XCTAssertNotNil(membership)
+        }
+    }
+
+    func testCreateLeagueAutoRecoversFromLeagueMembersSequenceMismatch() async throws {
+        try await withTestApp { app in
+            _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
+            let user = try await TestAuth.register(app: app)
+
+            _ = try await createLeague(app: app, token: user.token, name: "Liga Seed 1")
+
+            // Force next insert to reuse an existing id and trigger pkey conflict on league_members.
+            try await forceLeagueMembersSequence(app: app, to: 1, isCalled: false)
+
+            let recovered = try await createLeague(app: app, token: user.token, name: "Liga Recovered")
+            XCTAssertEqual(recovered.name, "Liga Recovered")
+
+            let memberships = try await LeagueMember.query(on: app.db).count()
+            XCTAssertEqual(memberships, 2)
+        }
+    }
+
+    func testJoinLeagueAutoRecoversFromLeagueMembersSequenceMismatch() async throws {
+        try await withTestApp { app in
+            _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
+            let creator = try await TestAuth.register(app: app)
+            let joiner = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(app: app, token: creator.token, name: "Liga Join Recover", maxPlayers: 3)
+
+            // Force next membership insert (join) to hit duplicate id and exercise auto-recovery.
+            try await forceLeagueMembersSequence(app: app, to: 1, isCalled: false)
+
+            let joined = try await joinLeague(app: app, token: joiner.token, code: league.code)
+            XCTAssertEqual(joined.id, league.id)
+
+            let leagueID = try XCTUnwrap(league.id)
+            let memberCount = try await LeagueMember.query(on: app.db)
+                .filter(\.$league.$id == leagueID)
+                .count()
+            XCTAssertEqual(memberCount, 2)
         }
     }
 
