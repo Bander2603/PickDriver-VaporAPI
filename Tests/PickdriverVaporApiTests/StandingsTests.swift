@@ -551,15 +551,14 @@ final class StandingsTests: XCTestCase {
             )
 
             let now = Date()
-            let fp1Time = now.addingTimeInterval(2 * 3600)
             let race = try await TestSeed.createRace(
                 app: app,
                 seasonID: try season.requireID(),
                 round: 1,
                 name: "Autopick GP",
                 completed: false,
-                fp1Time: fp1Time,
-                raceTime: now.addingTimeInterval(5 * 3600)
+                fp1Time: now.addingTimeInterval(48 * 3600),
+                raceTime: now.addingTimeInterval(51 * 3600)
             )
 
             let u1 = try await TestAuth.register(app: app)
@@ -579,6 +578,13 @@ final class StandingsTests: XCTestCase {
 
             try await joinLeague(app: app, token: u2.token, code: league.code)
             try await startDraft(app: app, token: u1.token, leagueID: leagueID)
+
+            let sql = try XCTUnwrap(app.db as? (any SQLDatabase), "DB is not SQLDatabase")
+            try await sql.raw("""
+                UPDATE races
+                SET fp1_time = \(bind: now.addingTimeInterval(2 * 3600))
+                WHERE id = \(bind: try race.requireID())
+            """).run()
 
             let pickOrder = try await getPickOrder(
                 app: app,

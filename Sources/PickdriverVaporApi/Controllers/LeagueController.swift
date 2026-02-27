@@ -11,6 +11,9 @@ import SQLKit
 import PostgresNIO
 
 struct LeagueController: RouteCollection {
+    private static let leagueStartDraftGuardWindow: TimeInterval = 3 * 3600
+    private static let firstHalfDraftOffset: TimeInterval = 36 * 3600
+
     func boot(routes: any RoutesBuilder) throws {
         let protected = routes.grouped(UserAuthenticator())
 
@@ -29,6 +32,33 @@ struct LeagueController: RouteCollection {
         protected.get(":leagueID", "autopick", use: getAutopickList)
         protected.put(":leagueID", "autopick", use: upsertAutopickList)
 
+    }
+
+    private func initialDraftEligibleRace(
+        seasonID: Int,
+        on database: any Database,
+        now: Date = Date()
+    ) async throws -> Race? {
+        let upcomingRaces = try await Race.query(on: database)
+            .filter(\.$seasonID == seasonID)
+            .filter(\.$completed == false)
+            .sort(\.$raceTime)
+            .sort(\.$round)
+            .all()
+
+        for race in upcomingRaces {
+            guard let fp1Time = race.fp1Time else {
+                continue
+            }
+
+            let firstHalfDeadline = fp1Time.addingTimeInterval(-Self.firstHalfDraftOffset)
+            let creationCutoff = firstHalfDeadline.addingTimeInterval(-Self.leagueStartDraftGuardWindow)
+            if now < creationCutoff {
+                return race
+            }
+        }
+
+        return nil
     }
 
     struct AutopickListRequest: Content {
@@ -63,17 +93,35 @@ struct LeagueController: RouteCollection {
         let userID = try user.requireID()
         let activeSeasonID = try await Season.requireActiveID(on: req.db)
 
-        let activeLeagueCount = try await League.query(on: req.db)
-            .filter(\.$creator.$id == userID)
-            .filter(\.$status ~~ ["pending", "active"])
-            .count()
-
-        guard activeLeagueCount < 3 else {
-            throw Abort(.badRequest, reason: "League creation limit reached. You can only have 3 pending or active leagues.")
-        }
-
         func runCreateLeagueTransaction() async throws -> League.Public {
             try await req.db.transaction { tx in
+                guard let sql = tx as? (any SQLDatabase) else {
+                    throw Abort(.internalServerError, reason: "SQLDatabase required to create league.")
+                }
+
+                // Serialize league creation per owner to enforce limits under concurrency.
+                _ = try await sql.raw("SELECT id FROM users WHERE id = \(bind: userID) FOR UPDATE").run()
+
+                let seasonRaceCount = try await Race.query(on: tx)
+                    .filter(\.$seasonID == activeSeasonID)
+                    .count()
+                if seasonRaceCount > 0,
+                   try await initialDraftEligibleRace(seasonID: activeSeasonID, on: tx) == nil {
+                    throw Abort(
+                        .badRequest,
+                        reason: "No races available to create a new league in the current season. Please wait for the next active season."
+                    )
+                }
+
+                let activeLeagueCount = try await League.query(on: tx)
+                    .filter(\.$creator.$id == userID)
+                    .filter(\.$status ~~ ["pending", "active"])
+                    .count()
+
+                guard activeLeagueCount < 3 else {
+                    throw Abort(.badRequest, reason: "League creation limit reached. You can only have 3 pending or active leagues.")
+                }
+
                 let code = generateUniqueCode()
                 let league = League(
                     name: data.name,
@@ -88,9 +136,12 @@ struct LeagueController: RouteCollection {
                 )
 
                 try await league.save(on: tx)
-
-                let member = LeagueMember(userID: userID, leagueID: try league.requireID())
-                try await member.save(on: tx)
+                try await saveLeagueMemberWithSequenceRecovery(
+                    userID: userID,
+                    leagueID: try league.requireID(),
+                    on: tx,
+                    logger: req.logger
+                )
 
                 return league.convertToPublic()
             }
@@ -101,17 +152,11 @@ struct LeagueController: RouteCollection {
         } catch let psql as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(psql) {
             req.logger.warning("league_members sequence mismatch detected during createLeague; attempting automatic sequence resync.")
             try await resyncLeagueMembersSequence(on: req.db)
-
-            do {
-                return try await runCreateLeagueTransaction()
-            } catch let retryPSQL as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(retryPSQL) {
-                throw Abort(
-                    .conflict,
-                    reason: "Database sequence mismatch detected. Auto-repair was attempted for league_members but create league still failed. Please retry."
-                )
-            } catch let retryInvitePSQL as PSQLError where isInviteCodeConflict(retryInvitePSQL) {
-                throw Abort(.conflict, reason: "Generated invite code collided. Please try creating the league again.")
-            }
+            return try await runCreateLeagueTransaction()
+        } catch let psql as PSQLError where isLeaguesPrimaryKeySequenceConflict(psql) {
+            req.logger.warning("leagues sequence mismatch detected during createLeague; attempting automatic sequence resync.")
+            try await resyncLeaguesSequence(on: req.db)
+            return try await runCreateLeagueTransaction()
         } catch let psql as PSQLError where isInviteCodeConflict(psql) {
             throw Abort(.conflict, reason: "Generated invite code collided. Please try creating the league again.")
         }
@@ -176,6 +221,10 @@ struct LeagueController: RouteCollection {
         let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
         try LeagueAccess.requireOwner(req, league: league)
 
+        guard league.status == "pending" else {
+            throw Abort(.badRequest, reason: "Pick order can only be assigned while league is pending.")
+        }
+
         let members = try await LeagueMember.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .all()
@@ -233,135 +282,169 @@ struct LeagueController: RouteCollection {
     }
     
     func activateDraft(_ req: Request) async throws -> HTTPStatus {
-        let _ = try req.auth.require(User.self)
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
         guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
             throw Abort(.badRequest, reason: "Invalid league ID")
         }
 
-        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
-        try LeagueAccess.requireOwner(req, league: league)
-
-        guard league.status == "pending" else {
-            throw Abort(.badRequest, reason: "League must be pending to start the draft.")
+        struct PendingDraftNotification {
+            let recipientID: Int
+            let league: League
+            let race: Race
+            let draftID: Int
         }
 
-        let members = try await LeagueMember.query(on: req.db)
-            .filter(\.$league.$id == leagueID)
-            .all()
-
-        guard members.count == league.maxPlayers else {
-            throw Abort(.badRequest, reason: "Not all players have joined.")
-        }
-
-        if league.teamsEnabled {
-            let allUsers = Set(members.map { $0.$user.id })
-            let assignedUsers = Set(try await TeamMember.query(on: req.db)
-                .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
-                .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
-                .all()
-                .map { $0.$user.id })
-
-            guard assignedUsers == allUsers else {
-                throw Abort(.badRequest, reason: "All players must be assigned to teams.")
+        let notification = try await req.db.transaction { tx -> PendingDraftNotification? in
+            guard let sql = tx as? (any SQLDatabase) else {
+                throw Abort(.internalServerError, reason: "SQLDatabase required to activate draft.")
             }
-        }
 
-        // 🔀 Use assigned pick order if present; otherwise compute a fair randomized order
-        var pickOrderMembers: [LeagueMember] = []
-        let assignedOrders = members.compactMap { $0.pickOrder }
-        let hasAssignedOrder = assignedOrders.count == members.count
-            && Set(assignedOrders).count == members.count
+            _ = try await sql.raw("SELECT id FROM leagues WHERE id = \(bind: leagueID) FOR UPDATE").run()
 
-        if hasAssignedOrder {
-            pickOrderMembers = members.sorted { ($0.pickOrder ?? 0) < ($1.pickOrder ?? 0) }
-        } else {
+            guard let league = try await League.find(leagueID, on: tx) else {
+                throw Abort(.notFound, reason: "League not found")
+            }
+
+            guard league.$creator.id == userID else {
+                throw Abort(.forbidden, reason: "Only the league owner can perform this action")
+            }
+
+            let isMember = try await LeagueMember.query(on: tx)
+                .filter(\.$league.$id == leagueID)
+                .filter(\.$user.$id == userID)
+                .first() != nil
+            guard isMember else {
+                throw Abort(.forbidden, reason: "You are not a member of this league")
+            }
+
+            guard league.status == "pending" else {
+                throw Abort(.badRequest, reason: "League must be pending to start the draft.")
+            }
+
+            let members = try await LeagueMember.query(on: tx)
+                .filter(\.$league.$id == leagueID)
+                .all()
+
+            guard members.count == league.maxPlayers else {
+                throw Abort(.badRequest, reason: "Not all players have joined.")
+            }
+
             if league.teamsEnabled {
-                let teamAssignments = try await TeamMember.query(on: req.db)
+                let allUsers = Set(members.map { $0.$user.id })
+                let assignedUsers = Set(try await TeamMember.query(on: tx)
                     .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
                     .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
                     .all()
+                    .map { $0.$user.id })
 
-                var teamMap: [Int: [LeagueMember]] = [:]
-                for member in members {
-                    if let teamEntry = teamAssignments.first(where: { $0.$user.id == member.$user.id }) {
-                        let teamID = teamEntry.$team.id
-                        teamMap[teamID, default: []].append(member)
-                    }
+                guard assignedUsers == allUsers else {
+                    throw Abort(.badRequest, reason: "All players must be assigned to teams.")
                 }
+            }
 
-                for (teamID, list) in teamMap {
-                    teamMap[teamID] = list.shuffled()
-                }
+            var pickOrderMembers: [LeagueMember] = []
+            let assignedOrders = members.compactMap { $0.pickOrder }
+            let hasAssignedOrder = assignedOrders.count == members.count
+                && Set(assignedOrders).count == members.count
 
-                let teamIDs = teamMap.keys.shuffled()
-                var index = 0
-                while pickOrderMembers.count < members.count {
-                    for teamID in teamIDs {
-                        if let list = teamMap[teamID], index < list.count {
-                            pickOrderMembers.append(list[index])
+            if hasAssignedOrder {
+                pickOrderMembers = members.sorted { ($0.pickOrder ?? 0) < ($1.pickOrder ?? 0) }
+            } else {
+                if league.teamsEnabled {
+                    let teamAssignments = try await TeamMember.query(on: tx)
+                        .join(LeagueTeam.self, on: \TeamMember.$team.$id == \LeagueTeam.$id)
+                        .filter(LeagueTeam.self, \LeagueTeam.$league.$id == leagueID)
+                        .all()
+
+                    var teamMap: [Int: [LeagueMember]] = [:]
+                    for member in members {
+                        if let teamEntry = teamAssignments.first(where: { $0.$user.id == member.$user.id }) {
+                            let teamID = teamEntry.$team.id
+                            teamMap[teamID, default: []].append(member)
                         }
                     }
-                    index += 1
+
+                    for (teamID, list) in teamMap {
+                        teamMap[teamID] = list.shuffled()
+                    }
+
+                    let teamIDs = teamMap.keys.shuffled()
+                    var index = 0
+                    while pickOrderMembers.count < members.count {
+                        for teamID in teamIDs {
+                            if let list = teamMap[teamID], index < list.count {
+                                pickOrderMembers.append(list[index])
+                            }
+                        }
+                        index += 1
+                    }
+                } else {
+                    pickOrderMembers = members.shuffled()
                 }
 
-            } else {
-                pickOrderMembers = members.shuffled()
+                for (index, member) in pickOrderMembers.enumerated() {
+                    member.pickOrder = index + 1
+                    try await member.save(on: tx)
+                }
             }
 
-            for (index, member) in pickOrderMembers.enumerated() {
-                member.pickOrder = index + 1
-                try await member.save(on: req.db)
-            }
-        }
-
-        // 🎯 First upcoming race
-        let firstRace = try await Race.query(on: req.db)
-            .filter(\.$seasonID == league.seasonID)
-            .filter(\.$completed == false)
-            .sort(\.$raceTime)
-            .first()
-
-        guard let race = firstRace else {
-            throw Abort(.badRequest, reason: "No upcoming races found for the active season.")
-        }
-
-        league.status = "active"
-        league.initialRaceRound = race.round
-        try await league.save(on: req.db)
-
-        // 🗓️ Races from initial round
-        let allRaces = try await Race.query(on: req.db)
-            .filter(\.$seasonID == league.seasonID)
-            .filter(\.$round >= league.initialRaceRound ?? 1)
-            .sort(\.$round)
-            .all()
-
-        let baseOrder = pickOrderMembers.map { $0.$user.id }
-
-        for (i, race) in allRaces.enumerated() {
-            let rotated = Array(baseOrder.dropFirst(i % baseOrder.count) + baseOrder.prefix(i % baseOrder.count))
-            let pickOrder = league.mirrorEnabled ? rotated + rotated.reversed() : rotated
-
-            let draft = RaceDraft(
-                leagueID: leagueID,
-                raceID: try race.requireID(),
-                pickOrder: pickOrder,
-                mirrorPicks: league.mirrorEnabled,
-                status: "pending"
-            )
-            try await draft.save(on: req.db)
-
-            if i == 0, let firstUserID = pickOrder.first {
-                try await NotificationService.notifyDraftTurn(
-                    on: req.db,
-                    app: req.application,
-                    recipientID: firstUserID,
-                    league: league,
-                    race: race,
-                    draftID: try draft.requireID(),
-                    pickIndex: 0
+            guard let race = try await initialDraftEligibleRace(seasonID: league.seasonID, on: tx) else {
+                throw Abort(
+                    .badRequest,
+                    reason: "No races available to start a new league draft in the current season. Please wait for the next active season."
                 )
             }
+
+            league.status = "active"
+            league.initialRaceRound = race.round
+            try await league.save(on: tx)
+
+            let allRaces = try await Race.query(on: tx)
+                .filter(\.$seasonID == league.seasonID)
+                .filter(\.$round >= race.round)
+                .sort(\.$round)
+                .all()
+
+            let baseOrder = pickOrderMembers.map { $0.$user.id }
+            var pendingNotification: PendingDraftNotification?
+
+            for (i, race) in allRaces.enumerated() {
+                let rotated = Array(baseOrder.dropFirst(i % baseOrder.count) + baseOrder.prefix(i % baseOrder.count))
+                let pickOrder = league.mirrorEnabled ? rotated + rotated.reversed() : rotated
+
+                let draft = RaceDraft(
+                    leagueID: leagueID,
+                    raceID: try race.requireID(),
+                    pickOrder: pickOrder,
+                    mirrorPicks: league.mirrorEnabled,
+                    status: "pending"
+                )
+                try await draft.save(on: tx)
+
+                if i == 0, let firstUserID = pickOrder.first {
+                    pendingNotification = PendingDraftNotification(
+                        recipientID: firstUserID,
+                        league: league,
+                        race: race,
+                        draftID: try draft.requireID()
+                    )
+                }
+            }
+
+            return pendingNotification
+        }
+
+        if let notification {
+            try await NotificationService.notifyDraftTurn(
+                on: req.db,
+                app: req.application,
+                recipientID: notification.recipientID,
+                league: notification.league,
+                race: notification.race,
+                draftID: notification.draftID,
+                pickIndex: 0
+            )
         }
 
         return .ok
@@ -693,43 +776,72 @@ struct JoinLeagueRequest: Content {
 
 func joinLeague(_ req: Request) async throws -> League.Public {
     let user = try req.auth.require(User.self)
+    let userID = try user.requireID()
     let data = try req.content.decode(JoinLeagueRequest.self)
 
-    guard let league = try await League.query(on: req.db)
-        .filter(\.$code == data.code)
-        .first() else {
-        throw Abort(.notFound, reason: "League with the given code not found.")
+    func runJoinLeagueTransaction() async throws -> League.Public {
+        try await req.db.transaction { tx in
+            guard let sql = tx as? (any SQLDatabase) else {
+                throw Abort(.internalServerError, reason: "SQLDatabase required to join league.")
+            }
+
+            struct LeagueJoinRow: Decodable {
+                let id: Int
+                let status: String
+                let max_players: Int
+            }
+
+            guard let row = try await sql.raw("""
+                SELECT id, status, max_players
+                FROM leagues
+                WHERE invite_code = \(bind: data.code)
+                FOR UPDATE
+            """).first(decoding: LeagueJoinRow.self) else {
+                throw Abort(.notFound, reason: "League with the given code not found.")
+            }
+
+            guard row.status.lowercased() == "pending" else {
+                throw Abort(.badRequest, reason: "You can only join leagues that are pending.")
+            }
+
+            let alreadyMember = try await LeagueMember.query(on: tx)
+                .filter(\.$user.$id == userID)
+                .filter(\.$league.$id == row.id)
+                .first() != nil
+            if alreadyMember {
+                throw Abort(.conflict, reason: "You are already a member of this league.")
+            }
+
+            let memberCount = try await LeagueMember.query(on: tx)
+                .filter(\.$league.$id == row.id)
+                .count()
+            if memberCount >= row.max_players {
+                throw Abort(.conflict, reason: "League is already full.")
+            }
+
+            try await saveLeagueMemberWithSequenceRecovery(
+                userID: userID,
+                leagueID: row.id,
+                on: tx,
+                logger: req.logger
+            )
+
+            guard let league = try await League.find(row.id, on: tx) else {
+                throw Abort(.notFound, reason: "League not found")
+            }
+            return league.convertToPublic()
+        }
     }
 
-    guard league.status.lowercased() == "pending" else {
-        throw Abort(.badRequest, reason: "You can only join leagues that are pending.")
+    do {
+        return try await runJoinLeagueTransaction()
+    } catch let psql as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(psql) {
+        req.logger.warning("league_members sequence mismatch detected during joinLeague; attempting automatic sequence resync.")
+        try await resyncLeagueMembersSequence(on: req.db)
+        return try await runJoinLeagueTransaction()
+    } catch let psql as PSQLError where isLeagueMembershipConflict(psql) {
+        throw Abort(.conflict, reason: "Join failed due to concurrent membership update. Please retry.")
     }
-
-    let alreadyMember = try await LeagueMember.query(on: req.db)
-        .filter(\.$user.$id == user.requireID())
-        .filter(\.$league.$id == league.requireID())
-        .first() != nil
-
-    if alreadyMember {
-        throw Abort(.conflict, reason: "You are already a member of this league.")
-    }
-
-    let memberCount = try await LeagueMember.query(on: req.db)
-        .filter(\.$league.$id == league.requireID())
-        .count()
-
-    if memberCount >= league.maxPlayers {
-        throw Abort(.conflict, reason: "League is already full.")
-    }
-
-    try await saveLeagueMemberWithSequenceRecovery(
-        userID: try user.requireID(),
-        leagueID: try league.requireID(),
-        on: req.db,
-        logger: req.logger
-    )
-
-    return league.convertToPublic()
 }
 
 private func saveLeagueMemberWithSequenceRecovery(
@@ -738,52 +850,76 @@ private func saveLeagueMemberWithSequenceRecovery(
     on database: any Database,
     logger: Logger
 ) async throws {
-    do {
-        let member = LeagueMember(userID: userID, leagueID: leagueID)
-        try await member.save(on: database)
-    } catch let psql as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(psql) {
-        logger.warning("league_members sequence mismatch detected; attempting automatic sequence resync.")
-        try await resyncLeagueMembersSequence(on: database)
+    _ = logger
+    let member = LeagueMember(userID: userID, leagueID: leagueID)
+    try await member.save(on: database)
+}
 
-        do {
-            let member = LeagueMember(userID: userID, leagueID: leagueID)
-            try await member.save(on: database)
-        } catch let retryPSQL as PSQLError where isLeagueMembersPrimaryKeySequenceConflict(retryPSQL) {
-            throw Abort(
-                .conflict,
-                reason: "Database sequence mismatch detected. Auto-repair was attempted for league_members but insert still failed. Please retry."
-            )
-        }
-    }
+private func resyncLeaguesSequence(on database: any Database) async throws {
+    try await resyncSerialSequence(on: database, table: "leagues", column: "id")
 }
 
 private func resyncLeagueMembersSequence(on database: any Database) async throws {
+    try await resyncSerialSequence(on: database, table: "league_members", column: "id")
+}
+
+private func resyncSerialSequence(
+    on database: any Database,
+    table: String,
+    column: String
+) async throws {
     guard let sql = database as? (any SQLDatabase) else {
-        throw Abort(.internalServerError, reason: "SQLDatabase required to recover league_members sequence.")
+        throw Abort(.internalServerError, reason: "SQLDatabase required to recover sequence for \(table).")
     }
 
     try await sql.raw("""
         SELECT setval(
-            pg_get_serial_sequence('public.league_members', 'id'),
-            COALESCE((SELECT MAX(id) FROM public.league_members), 0) + 1,
+            pg_get_serial_sequence('public.\(unsafeRaw: table)', '\(unsafeRaw: column)'),
+            COALESCE((SELECT MAX(\(unsafeRaw: column)) FROM public.\(unsafeRaw: table)), 0) + 1,
             false
         )
     """).run()
 }
 
+private func isLeaguesPrimaryKeySequenceConflict(_ error: PSQLError) -> Bool {
+    isPrimaryKeySequenceConflict(error, table: "leagues", primaryKeyConstraint: "leagues_pkey")
+}
+
 private func isLeagueMembersPrimaryKeySequenceConflict(_ error: PSQLError) -> Bool {
+    isPrimaryKeySequenceConflict(error, table: "league_members", primaryKeyConstraint: "league_members_pkey")
+}
+
+private func isPrimaryKeySequenceConflict(
+    _ error: PSQLError,
+    table: String,
+    primaryKeyConstraint: String
+) -> Bool {
     guard error.serverInfo?[.sqlState] == "23505" else {
         return false
     }
 
     let constraint = error.serverInfo?[.constraintName]?.lowercased() ?? ""
-    if constraint == "league_members_pkey" {
+    if constraint == primaryKeyConstraint {
         return true
     }
 
-    let table = error.serverInfo?[.tableName]?.lowercased() ?? ""
+    let errTable = error.serverInfo?[.tableName]?.lowercased() ?? ""
     let detail = error.serverInfo?[.detail]?.lowercased() ?? ""
-    return table == "league_members" && detail.contains("(id)")
+    return errTable == table && detail.contains("(id)")
+}
+
+private func isLeagueMembershipConflict(_ error: PSQLError) -> Bool {
+    guard error.serverInfo?[.sqlState] == "23505" else {
+        return false
+    }
+
+    let constraint = error.serverInfo?[.constraintName]?.lowercased() ?? ""
+    if constraint == "league_members_league_id_user_id_key" {
+        return true
+    }
+
+    let detail = error.serverInfo?[.detail]?.lowercased() ?? ""
+    return detail.contains("(league_id, user_id)")
 }
 
 private func isInviteCodeConflict(_ error: PSQLError) -> Bool {

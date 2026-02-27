@@ -206,6 +206,40 @@ final class LeagueTests: XCTestCase {
         }
     }
 
+    func testCreateLeagueFailsWhenNoEligibleRacesRemainInSeason() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)
+            let user = try await TestAuth.register(app: app)
+
+            let now = Date()
+            let fp1 = now.addingTimeInterval(38 * 3600)
+            _ = try await TestSeed.createRace(
+                app: app,
+                seasonID: try season.requireID(),
+                round: 1,
+                name: "Last Race In Guard Window",
+                completed: false,
+                fp1Time: fp1,
+                raceTime: fp1.addingTimeInterval(2 * 24 * 3600)
+            )
+
+            try await app.test(.POST, "/api/leagues/create", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: user.token)
+                try req.content.encode(CreateLeaguePayload(
+                    name: "Liga sin carrera elegible",
+                    maxPlayers: 2,
+                    teamsEnabled: false,
+                    bansEnabled: false,
+                    mirrorEnabled: false
+                ))
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .badRequest)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.lowercased().contains("next active season"))
+            })
+        }
+    }
+
     func testCreateLeagueFailsWhenExceedingCreatorLimit() async throws {
         try await withTestApp { app in
             _ = try await TestSeed.createSeason(app: app, year: 2026, name: "Season 2026", active: true)

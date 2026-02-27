@@ -376,6 +376,120 @@ final class DraftTests: XCTestCase {
         }
     }
 
+    func testStartDraftSkipsNearestRaceWhenInsideThreeHourGuardWindow() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+
+            let now = Date()
+            let fp1Race1 = now.addingTimeInterval(38 * 3600)
+            let fp1Race2 = now.addingTimeInterval(10 * 24 * 3600)
+
+            let race1 = try await TestSeed.createRace(
+                app: app,
+                seasonID: try season.requireID(),
+                round: 1,
+                name: "Race In Guard Window",
+                completed: false,
+                fp1Time: fp1Race1,
+                raceTime: fp1Race1.addingTimeInterval(2 * 24 * 3600)
+            )
+            let race2 = try await TestSeed.createRace(
+                app: app,
+                seasonID: try season.requireID(),
+                round: 2,
+                name: "Race Eligible",
+                completed: false,
+                fp1Time: fp1Race2,
+                raceTime: fp1Race2.addingTimeInterval(2 * 24 * 3600)
+            )
+
+            let u1 = try await TestAuth.register(app: app)
+            let u2 = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(
+                app: app,
+                token: u1.token,
+                name: "Draft League Skip First",
+                maxPlayers: 2,
+                teamsEnabled: false,
+                bansEnabled: false,
+                mirrorEnabled: false
+            )
+            let leagueID = try XCTUnwrap(league.id)
+
+            try await joinLeague(app: app, token: u2.token, code: league.code)
+            try await startDraft(app: app, token: u1.token, leagueID: leagueID)
+
+            let dbLeague = try await fetchLeagueFromDB(app: app, leagueID: leagueID)
+            XCTAssertEqual(dbLeague.initialRaceRound, 2)
+
+            let race1ID = try race1.requireID()
+            let race2ID = try race2.requireID()
+
+            let sql = try XCTUnwrap(app.db as? (any SQLDatabase), "DB is not SQLDatabase")
+            struct CountRow: Decodable { let count: Int }
+
+            let race1DraftCount = try await sql.raw("""
+                SELECT COUNT(*)::int AS count
+                FROM race_drafts
+                WHERE league_id = \(bind: leagueID)
+                  AND race_id = \(bind: race1ID)
+            """).first(decoding: CountRow.self)
+
+            let race2DraftCount = try await sql.raw("""
+                SELECT COUNT(*)::int AS count
+                FROM race_drafts
+                WHERE league_id = \(bind: leagueID)
+                  AND race_id = \(bind: race2ID)
+            """).first(decoding: CountRow.self)
+
+            XCTAssertEqual(race1DraftCount?.count, 0)
+            XCTAssertEqual(race2DraftCount?.count, 1)
+        }
+    }
+
+    func testStartDraftFailsWhenNoEligibleRacesRemainInSeason() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+
+            let u1 = try await TestAuth.register(app: app)
+            let u2 = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(
+                app: app,
+                token: u1.token,
+                name: "Draft League No Eligible Races",
+                maxPlayers: 2,
+                teamsEnabled: false,
+                bansEnabled: false,
+                mirrorEnabled: false
+            )
+            let leagueID = try XCTUnwrap(league.id)
+
+            try await joinLeague(app: app, token: u2.token, code: league.code)
+
+            let now = Date()
+            let fp1 = now.addingTimeInterval(38 * 3600)
+            _ = try await TestSeed.createRace(
+                app: app,
+                seasonID: try season.requireID(),
+                round: 1,
+                name: "Last Race In Guard Window",
+                completed: false,
+                fp1Time: fp1,
+                raceTime: fp1.addingTimeInterval(2 * 24 * 3600)
+            )
+
+            try await app.test(.POST, "/api/leagues/\(leagueID)/start-draft", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: u1.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .badRequest)
+                let err = try res.content.decode(APIErrorResponse.self)
+                XCTAssertTrue(err.reason.lowercased().contains("next active season"), "Unexpected reason: \(err.reason)")
+            })
+        }
+    }
+
     func testStartDraftFailsWhenNotAllPlayersJoined() async throws {
         try await withTestApp { app in
             _ = try await TestSeed.createSeason(app: app, year: 2026, active: true)

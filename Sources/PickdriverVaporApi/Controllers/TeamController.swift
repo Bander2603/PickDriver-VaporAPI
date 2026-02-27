@@ -7,6 +7,7 @@
 
 import Vapor
 import Fluent
+import PostgresNIO
 
 struct TeamController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
@@ -91,8 +92,7 @@ struct TeamController: RouteCollection {
         try await team.save(on: req.db)
 
         for userID in requestedUserIDs {
-            let assignment = TeamMember(userID: userID, teamID: try team.requireID())
-            try await assignment.save(on: req.db)
+            try await saveTeamMemberAssignment(userID: userID, teamID: try team.requireID(), on: req.db)
         }
 
         guard let fullTeam = try await LeagueTeam.query(on: req.db)
@@ -198,8 +198,7 @@ struct TeamController: RouteCollection {
             .delete()
 
         for userID in requestedUserIDs {
-            let assignment = TeamMember(userID: userID, teamID: teamID)
-            try await assignment.save(on: req.db)
+            try await saveTeamMemberAssignment(userID: userID, teamID: teamID, on: req.db)
         }
 
         guard let fullTeam = try await LeagueTeam.query(on: req.db)
@@ -320,9 +319,31 @@ struct TeamController: RouteCollection {
 
         try TeamBalance.validate(totalPlayers: memberCount, teamSizes: prospectiveSizes, maxTeams: maxTeams)
 
-        let assignment = TeamMember(userID: data.userID, teamID: try team.requireID())
-        try await assignment.save(on: req.db)
+        try await saveTeamMemberAssignment(userID: data.userID, teamID: try team.requireID(), on: req.db)
         req.logger.info("Teams: assigned", metadata: ["team_id": "\(teamID)"])
         return .ok
     }
+}
+
+private func saveTeamMemberAssignment(userID: Int, teamID: Int, on db: any Database) async throws {
+    do {
+        let assignment = TeamMember(userID: userID, teamID: teamID)
+        try await assignment.save(on: db)
+    } catch let psql as PSQLError where isTeamMemberConflict(psql) {
+        throw Abort(.conflict, reason: "User is already assigned to a team in this league")
+    }
+}
+
+private func isTeamMemberConflict(_ error: PSQLError) -> Bool {
+    guard error.serverInfo?[.sqlState] == "23505" else {
+        return false
+    }
+
+    let constraint = error.serverInfo?[.constraintName]?.lowercased() ?? ""
+    if constraint == "team_members_team_id_user_id_key" || constraint == "team_members_unique_user_per_league" {
+        return true
+    }
+
+    let detail = error.serverInfo?[.detail]?.lowercased() ?? ""
+    return detail.contains("(team_id, user_id)") || detail.contains("(league_id, user_id)")
 }
