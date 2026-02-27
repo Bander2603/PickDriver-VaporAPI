@@ -202,8 +202,8 @@ final class DraftEdgeCasesTests: XCTestCase {
                 round: 1,
                 name: "Deadline GP",
                 completed: false,
-                fp1Time: now.addingTimeInterval(3600),
-                raceTime: now.addingTimeInterval(2 * 3600)
+                fp1Time: now.addingTimeInterval(48 * 3600),
+                raceTime: now.addingTimeInterval(50 * 3600)
             )
 
             let u1 = try await TestAuth.register(app: app)
@@ -223,6 +223,13 @@ final class DraftEdgeCasesTests: XCTestCase {
 
             try await joinLeague(app: app, token: u2.token, code: league.code)
             try await startDraft(app: app, token: u1.token, leagueID: leagueID)
+
+            let sql = try XCTUnwrap(app.db as? (any SQLDatabase), "DB is not SQLDatabase")
+            try await sql.raw("""
+                UPDATE races
+                SET fp1_time = \(bind: now.addingTimeInterval(3600))
+                WHERE id = \(bind: try race.requireID())
+            """).run()
 
             let pickOrder = try await getPickOrder(
                 app: app,
@@ -328,10 +335,19 @@ final class DraftEdgeCasesTests: XCTestCase {
             )
 
             let now = Date()
-            let pastRace = try await TestSeed.createRace(
+            _ = try await TestSeed.createRace(
                 app: app,
                 seasonID: try season.requireID(),
                 round: 1,
+                name: "Eligible GP",
+                completed: false,
+                fp1Time: now.addingTimeInterval(72 * 3600),
+                raceTime: now.addingTimeInterval(74 * 3600)
+            )
+            let pastRace = try await TestSeed.createRace(
+                app: app,
+                seasonID: try season.requireID(),
+                round: 2,
                 name: "Past GP",
                 completed: false,
                 fp1Time: now.addingTimeInterval(-5 * 3600),
