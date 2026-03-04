@@ -104,6 +104,12 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 ### Access rules
 - Only current turn user can pick.
 - If `teamsEnabled = true` and less than 1h remains before fp1, a teammate can pick for the current turn.
+- Pick actions are serialized per draft with DB transaction + draft row lock (`FOR UPDATE`) to avoid concurrent inconsistencies.
+- A user can edit their already-submitted pick only while their draft slot is still active:
+  - they are the immediate previous slot (`currentPickIndex - 1`)
+  - their slot deadline has not passed
+  - the next slot has not submitted a valid pick yet
+- Once the next slot is effectively resolved (turn advanced), editing the previous pick is rejected.
 
 ### Validations
 - pick/ban is blocked if race already started or completed:
@@ -112,9 +118,12 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 - Picking an already-picked driver is blocked (global within draft).
 - Picking a driver banned by that user is blocked.
 - Only one pick per user and per mirror slot (`is_mirror_pick`).
+- If a driver becomes unavailable while submitting (due to concurrent action), API returns conflict (`Driver no longer available`).
+- If a pick edit arrives after the active slot window closed, API returns conflict (`Your turn is no longer active`).
 
 ### Effects
 - Inserts pick and advances `currentPickIndex`.
+- Editing an active previous pick updates the existing pick in place and does not advance `currentPickIndex`.
 - Notifies next player when applicable.
 
 ## Bans
