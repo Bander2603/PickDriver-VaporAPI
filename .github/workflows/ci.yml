@@ -38,6 +38,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: |
+          if [ "$(id -u)" -eq 0 ]; then
+            apt-get update
+            apt-get install -y curl ca-certificates tar postgresql-client
+          else
+            sudo apt-get update
+            sudo apt-get install -y curl ca-certificates tar postgresql-client
+          fi
+
       - name: Gitleaks
         run: |
           set -eu
@@ -51,16 +61,6 @@ jobs:
 
       - name: Build
         run: swift build -c debug
-
-      - name: Install PostgreSQL client
-        run: |
-          if [ "$(id -u)" -eq 0 ]; then
-            apt-get update
-            apt-get install -y postgresql-client
-          else
-            sudo apt-get update
-            sudo apt-get install -y postgresql-client
-          fi
 
       - name: Enable pg_trgm
         run: |
