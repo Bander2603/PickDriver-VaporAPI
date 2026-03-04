@@ -40,7 +40,7 @@ jobs:
 
       - name: Gitleaks
         run: |
-          set -euo pipefail
+          set -eu
           TMPDIR=$(mktemp -d)
           TAG="v8.30.0"
           ASSET="gitleaks_8.30.0_linux_x64.tar.gz"
