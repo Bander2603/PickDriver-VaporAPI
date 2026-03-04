@@ -192,6 +192,27 @@ final class DraftPickTests: XCTestCase {
         return dto
     }
 
+    private func makePickError(
+        app: Application,
+        token: String,
+        leagueID: Int,
+        raceID: Int,
+        driverID: Int,
+        expectedStatus: HTTPResponseStatus
+    ) async throws -> APIErrorResponse {
+        var error: APIErrorResponse?
+
+        try await app.test(.POST, "/api/leagues/\(leagueID)/draft/\(raceID)/pick", beforeRequest: { req async throws in
+            req.headers.bearerAuthorization = .init(token: token)
+            try req.content.encode(PickPayload(driverID: driverID))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, expectedStatus)
+            error = try res.content.decode(APIErrorResponse.self)
+        })
+
+        return try XCTUnwrap(error)
+    }
+
     private func banPick(
         app: Application,
         token: String,
@@ -917,6 +938,147 @@ final class DraftPickTests: XCTestCase {
             XCTAssertEqual(draft.bansUsedByUserID[String(firstUserID)], 0)
             XCTAssertEqual(draft.bansUsedByTeamID[String(secondTeamID)], 1)
             XCTAssertEqual(draft.bansUsedByTeamID[String(firstTeamID)], 0)
+        }
+    }
+
+    func testMakePickAllowsEditingOwnPreviousPickWhileNextTurnPending() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraft3Players(app: app)
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+            let firstToken = seeded.users.token(for: firstUserID)
+
+            let initialDriverID = seeded.driverIDs[0]
+            let editedDriverID = seeded.driverIDs[1]
+
+            _ = try await makePick(
+                app: app,
+                token: firstToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: initialDriverID,
+                expectedStatus: .ok
+            )
+
+            let editResponse = try await makePick(
+                app: app,
+                token: firstToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: editedDriverID,
+                expectedStatus: .ok
+            )
+
+            let dto = try XCTUnwrap(editResponse)
+            XCTAssertEqual(dto.currentPickIndex, 1)
+            XCTAssertEqual(dto.nextUserID, secondUserID)
+            XCTAssertTrue(dto.pickedDriverIDs.contains(editedDriverID))
+            XCTAssertFalse(dto.pickedDriverIDs.contains(initialDriverID))
+
+            let draft = try await getRaceDraft(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertEqual(draft.pickedDriverIDs[0], editedDriverID)
+            XCTAssertNil(draft.pickedDriverIDs[1])
+            XCTAssertNil(draft.pickedDriverIDs[2])
+        }
+    }
+
+    func testMakePickEditingPreviousPickFailsWhenTurnAlreadyAdvanced() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraft3Players(app: app)
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: seeded.driverIDs[0],
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: seeded.driverIDs[1],
+                expectedStatus: .ok
+            )
+
+            let error = try await makePickError(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: seeded.driverIDs[2],
+                expectedStatus: .forbidden
+            )
+            XCTAssertTrue(error.reason.lowercased().contains("not your turn"))
+        }
+    }
+
+    func testMakePickReturnsConflictWhenNextPlayerRequestsDriverTakenByEdit() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraft3Players(app: app)
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+            let firstToken = seeded.users.token(for: firstUserID)
+            let secondToken = seeded.users.token(for: secondUserID)
+
+            let firstInitialDriver = seeded.driverIDs[0]
+            let driverRequestedBySecond = seeded.driverIDs[1]
+            let fallbackDriverForSecond = seeded.driverIDs[2]
+
+            _ = try await makePick(
+                app: app,
+                token: firstToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: firstInitialDriver,
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: firstToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: driverRequestedBySecond,
+                expectedStatus: .ok
+            )
+
+            let conflict = try await makePickError(
+                app: app,
+                token: secondToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: driverRequestedBySecond,
+                expectedStatus: .conflict
+            )
+            XCTAssertTrue(conflict.reason.lowercased().contains("no longer available"))
+
+            _ = try await makePick(
+                app: app,
+                token: secondToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: fallbackDriverForSecond,
+                expectedStatus: .ok
+            )
+
+            let draft = try await getRaceDraft(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertEqual(draft.pickedDriverIDs[0], driverRequestedBySecond)
+            XCTAssertEqual(draft.pickedDriverIDs[1], fallbackDriverForSecond)
         }
     }
 
