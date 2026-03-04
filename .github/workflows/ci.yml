@@ -48,7 +48,7 @@ jobs:
           "$TMPDIR/gitleaks" detect -s . -v --config .gitleaks.toml
 
       - name: Setup Swift
-        uses: swift-actions/setup-swift@v3
+        uses: swift-actions/setup-swift@v2.4.0
         with:
           swift-version: "6.2.2"
 
