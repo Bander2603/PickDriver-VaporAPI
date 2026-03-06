@@ -195,13 +195,13 @@ Client integration notes (iOS/Web):
 
 ### Races (public)
 - GET /api/races
-  - Res: Race[] (active season only)
+  - Res: Race[] (active season only; includes `media` URLs)
 - GET /api/races/upcoming
-  - Res: Race[] (active season only)
+  - Res: Race[] (active season only; includes `media` URLs)
 - GET /api/races/current
-  - Res: Race (active season only)
+  - Res: Race (active season only; includes `media` URLs)
 - GET /api/races/:raceID
-  - Res: Race
+  - Res: Race (includes `media` URLs)
 
 ### Drivers (public)
 - GET /api/drivers
@@ -308,8 +308,15 @@ Race:
   "circuitData": { "laps": Int?, "first_gp": Int?, "race_distance": Double?, "circuit_length": Double?, "lap_record_time": String?, "lap_record_driver": String? }?,
   "country": String, "countryCode": String, "sprint": Bool, "completed": Bool,
   "fp1Time": Date?, "fp2Time": Date?, "fp3Time": Date?, "qualifyingTime": Date?,
-  "sprintTime": Date?, "raceTime": Date?, "sprintQualifyingTime": Date?
+  "sprintTime": Date?, "raceTime": Date?, "sprintQualifyingTime": Date?,
+  "media": {
+    "countryFlagURL": String, "circuitURL": String, "circuitSimpleURL": String
+  }
 }
+  - `media.countryFlagURL` -> `/media/country-flags/{countryCode.lowercased()}.png`
+  - `media.circuitURL` -> `/media/circuits/{slug(circuitName)}.png`
+  - `media.circuitSimpleURL` -> `/media/circuits-simple/{slug(circuitName)}.png`
+  - If `MEDIA_PUBLIC_BASE_URL` is configured, these are absolute URLs.
 
 Driver:
 { "id": Int, "seasonID": Int, "teamID": Int, "firstName": String, "lastName": String, "country": String, "driverNumber": Int, "active": Bool, "driverCode": String }

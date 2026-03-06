@@ -39,10 +39,15 @@ swift run PickdriverVaporApi migrate --yes
 swift run
 ```
 
+## Centralized media (flags + circuits)
+The API serves static media from `Public/media/*` and includes media URLs in each `Race` response.
+
+
 ## Environment variables
 See `.env.example` for the full list. Key values:
 - `JWT_SECRET` (required)
 - `DATABASE_*` (required)
+- `MEDIA_PUBLIC_BASE_URL` (optional; if set, race media links are absolute, e.g. `https://api.pickdriver.cc/media/...`; otherwise they are relative `/media/...`)
 - `CORS_ALLOWED_ORIGINS` (optional; comma-separated, recommended in production for browser clients like `https://app.example.com`)
 - `DATABASE_TLS_MODE` (`disable`, `prefer`, `require`)
   - Default is `require` in production, `disable` otherwise

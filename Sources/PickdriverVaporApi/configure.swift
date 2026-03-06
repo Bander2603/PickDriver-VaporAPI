@@ -13,6 +13,7 @@ public func configure(_ app: Application) async throws {
     app.http.server.configuration.port = 3000
     app.startedAt = Date()
     app.appVersion = Environment.get("APP_VERSION")?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "dev"
+    app.mediaPublicBaseURL = envString("MEDIA_PUBLIC_BASE_URL")
     let corsAllowedOrigins = envList("CORS_ALLOWED_ORIGINS")
     if !corsAllowedOrigins.isEmpty {
         let corsConfiguration = CORSMiddleware.Configuration(
@@ -148,8 +149,8 @@ public func configure(_ app: Application) async throws {
         app.apnsService = DisabledAPNSService()
     }
 
-    // uncomment to serve files from /Public folder
-    // app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
+    // Serve static assets from /Public (used by centralized media files)
+    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 
     let hostname = Environment.get("DATABASE_HOST") ?? "localhost"
     let port = Environment.get("DATABASE_PORT").flatMap(Int.init) ?? SQLPostgresConfiguration.ianaPortNumber
@@ -377,6 +378,15 @@ extension Application {
     var appVersion: String {
         get { self.storage[AppVersionKey.self] ?? "dev" }
         set { self.storage[AppVersionKey.self] = newValue }
+    }
+
+    private struct MediaPublicBaseURLKey: StorageKey {
+        typealias Value = String
+    }
+
+    var mediaPublicBaseURL: String? {
+        get { self.storage[MediaPublicBaseURLKey.self] }
+        set { self.storage[MediaPublicBaseURLKey.self] = newValue }
     }
 
     private struct EnableInternalRoutesKey: StorageKey {
