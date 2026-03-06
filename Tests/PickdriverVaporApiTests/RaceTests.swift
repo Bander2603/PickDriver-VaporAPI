@@ -9,6 +9,17 @@ import XCTVapor
 @testable import PickdriverVaporApi
 
 final class RaceTests: XCTestCase {
+    private struct RaceMediaDTO: Content {
+        let countryFlagURL: String
+        let circuitURL: String
+        let circuitSimpleURL: String
+    }
+
+    private struct RaceWithMediaDTO: Content {
+        let id: Int?
+        let name: String
+        let media: RaceMediaDTO
+    }
 
     private func assertDateEqualWithinOneSecond(_ a: Date?, _ b: Date?, file: StaticString = #filePath, line: UInt = #line) {
         guard let a, let b else {
@@ -173,6 +184,32 @@ final class RaceTests: XCTestCase {
                 XCTAssertEqual(res.status, .notFound)
                 let err = try res.content.decode(APIErrorResponse.self)
                 XCTAssertTrue(err.reason.lowercased().contains("race not found"))
+            })
+        }
+    }
+
+    func testRaceResponseIncludesCentralizedMediaURLs() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app)
+            let race = try await TestSeed.createRace(
+                app: app,
+                seasonID: season.id!,
+                round: 1,
+                name: "Bahrain Grand Prix",
+                completed: false,
+                raceTime: Date().addingTimeInterval(3600)
+            )
+            race.circuitName = "Bahrain International Circuit"
+            race.countryCode = "BH"
+            try await race.save(on: app.db)
+
+            try await app.test(.GET, "/api/races/\(race.id!)", afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+                let payload = try res.content.decode(RaceWithMediaDTO.self)
+                XCTAssertEqual(payload.id, race.id)
+                XCTAssertEqual(payload.media.countryFlagURL, "/media/country-flags/bh.png")
+                XCTAssertEqual(payload.media.circuitURL, "/media/circuits/bahrain-international-circuit.png")
+                XCTAssertEqual(payload.media.circuitSimpleURL, "/media/circuits-simple/bahrain-international-circuit.png")
             })
         }
     }
