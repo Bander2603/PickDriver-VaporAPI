@@ -10,3 +10,9 @@
 /apple-app-site-association
   Content-Type: application/json; charset=utf-8
   Cache-Control: max-age=300
+
+/reset-password*
+  Cache-Control: no-store
+
+/reset-password/success*
+  Cache-Control: no-store

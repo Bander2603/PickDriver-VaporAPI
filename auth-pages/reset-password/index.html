@@ -6,116 +6,351 @@
     <title>PickDriver - Reset Password</title>
     <style>
       :root {
-        --bg: #0f172a;
-        --card: #111827;
-        --text: #e5e7eb;
-        --muted: #94a3b8;
-        --accent: #22c55e;
-        --error: #ef4444;
+        --pd-bg: #0b0d12;
+        --pd-surface: #151a24;
+        --pd-surface-alt: #1b2230;
+        --pd-text: #f2f4f8;
+        --pd-muted: #9aa3b2;
+        --pd-border: #2a3140;
+        --pd-accent: #e10600;
+        --pd-accent-strong: #ff3b2f;
+        --pd-success: #38d27f;
+        --pd-error: #ff5b67;
       }
-      * { box-sizing: border-box; }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
       body {
+        min-height: 100%;
         margin: 0;
-        min-height: 100vh;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background: radial-gradient(circle at top, #1e293b 0%, var(--bg) 60%);
-        color: var(--text);
+        font-family: "Bahnschrift", "Franklin Gothic Medium", "Segoe UI", sans-serif;
+        color: var(--pd-text);
+      }
+
+      body {
+        padding: 20px;
         display: grid;
         place-items: center;
-        padding: 24px;
+        background-color: var(--pd-bg);
+        background-image:
+          radial-gradient(900px circle at 15% 10%, rgba(225, 6, 0, 0.18), transparent 60%),
+          radial-gradient(700px circle at 85% 20%, rgba(74, 110, 255, 0.14), transparent 65%),
+          repeating-linear-gradient(
+            120deg,
+            rgba(255, 255, 255, 0.04) 0,
+            rgba(255, 255, 255, 0.04) 1px,
+            transparent 1px,
+            transparent 14px
+          ),
+          linear-gradient(150deg, #0b0d12 0%, #111826 55%, #0b0d12 100%);
       }
-      .card {
-        width: 100%;
-        max-width: 520px;
-        background: var(--card);
-        border: 1px solid #1f2937;
-        border-radius: 14px;
-        padding: 24px;
+
+      .auth-card {
+        width: min(100%, 560px);
+        background: linear-gradient(180deg, rgba(21, 26, 36, 0.98) 0%, rgba(20, 24, 34, 0.95) 100%);
+        border: 1px solid var(--pd-border);
+        border-radius: 16px;
+        padding: 28px;
+        box-shadow:
+          0 20px 50px rgba(0, 0, 0, 0.5),
+          0 0 0 1px rgba(255, 255, 255, 0.04) inset;
       }
-      h1 { margin: 0 0 8px; font-size: 24px; }
-      p { margin: 0 0 18px; color: var(--muted); line-height: 1.5; }
-      label { display: block; margin: 0 0 6px; font-size: 14px; }
+
+      .brand {
+        margin: 0 0 18px;
+        font-size: 0.72rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--pd-muted);
+      }
+
+      h1 {
+        margin: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: clamp(1.45rem, 4vw, 1.95rem);
+      }
+
+      .subtitle {
+        margin: 10px 0 0;
+        color: var(--pd-muted);
+        line-height: 1.5;
+      }
+
+      form {
+        margin-top: 20px;
+      }
+
+      .field {
+        margin-bottom: 14px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 7px;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        font-size: 0.73rem;
+        color: var(--pd-muted);
+      }
+
       input {
         width: 100%;
-        margin-bottom: 14px;
-        border: 1px solid #334155;
-        background: #0b1220;
-        color: var(--text);
-        border-radius: 8px;
-        padding: 10px 12px;
-        font-size: 15px;
+        border: 1px solid var(--pd-border);
+        border-radius: 12px;
+        background: var(--pd-surface-alt);
+        color: var(--pd-text);
+        padding: 12px 14px;
+        font-size: 1rem;
       }
+
+      input:focus {
+        outline: none;
+        box-shadow: 0 0 0 0.2rem rgba(225, 6, 0, 0.34);
+        border-color: var(--pd-accent-strong);
+      }
+
       button {
         width: 100%;
-        border: none;
-        border-radius: 8px;
-        padding: 11px 12px;
-        background: var(--accent);
-        color: #04120a;
+        margin-top: 4px;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 16px;
+        text-transform: uppercase;
+        letter-spacing: 0.11em;
         font-weight: 700;
         cursor: pointer;
+        color: #fff;
+        background: linear-gradient(120deg, var(--pd-accent), var(--pd-accent-strong));
+        box-shadow: 0 10px 22px rgba(225, 6, 0, 0.28);
       }
-      button:disabled { opacity: 0.6; cursor: wait; }
-      .msg { margin-top: 14px; font-size: 14px; }
-      .ok { color: var(--accent); }
-      .error { color: var(--error); }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 28px rgba(225, 6, 0, 0.36);
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .status {
+        margin-top: 16px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid transparent;
+        font-size: 0.95rem;
+        line-height: 1.45;
+      }
+
+      .status--loading {
+        color: var(--pd-text);
+        border-color: rgba(154, 163, 178, 0.35);
+        background: rgba(154, 163, 178, 0.08);
+      }
+
+      .status--ok {
+        color: var(--pd-success);
+        border-color: rgba(56, 210, 127, 0.35);
+        background: rgba(56, 210, 127, 0.08);
+      }
+
+      .status--error {
+        color: var(--pd-error);
+        border-color: rgba(255, 91, 103, 0.35);
+        background: rgba(255, 91, 103, 0.08);
+      }
+
+      .hidden {
+        display: none;
+      }
     </style>
   </head>
   <body>
-    <main class="card">
-      <h1>Reset Password</h1>
-      <p>Set a new password for your PickDriver account.</p>
+    <main class="auth-card">
+      <p class="brand">PickDriver</p>
+      <h1 id="pageTitle">Reset password</h1>
+      <p class="subtitle" id="pageSubtitle">
+        Enter a new password for your account.
+      </p>
 
-      <form id="form">
-        <label for="newPassword">New password</label>
-        <input id="newPassword" type="password" minlength="8" required />
+      <form id="form" novalidate>
+        <div class="field">
+          <label id="newPasswordLabel" for="newPassword">New password</label>
+          <input id="newPassword" type="password" minlength="8" autocomplete="new-password" required />
+        </div>
 
-        <label for="confirmPassword">Confirm new password</label>
-        <input id="confirmPassword" type="password" minlength="8" required />
+        <div class="field">
+          <label id="confirmPasswordLabel" for="confirmPassword">Confirm new password</label>
+          <input id="confirmPassword" type="password" minlength="8" autocomplete="new-password" required />
+        </div>
 
         <button id="submit" type="submit">Update password</button>
       </form>
 
-      <div id="msg" class="msg"></div>
+      <div id="status" class="status hidden"></div>
     </main>
 
     <script>
       const API_BASE = "https://api.pickdriver.cc";
+      const SUCCESS_PATH = "/reset-password/success";
+      const CONSUMED_TOKEN_KEY = "pickdriver-reset-consumed-token";
+      const AUTH_LANG_KEY = "pickdriver-auth-lang";
+      const DEFAULT_LANGUAGE = "en";
 
       const form = document.getElementById("form");
       const submit = document.getElementById("submit");
-      const msg = document.getElementById("msg");
+      const statusBox = document.getElementById("status");
+      const newPasswordInput = document.getElementById("newPassword");
+      const confirmPasswordInput = document.getElementById("confirmPassword");
+      const pageTitle = document.getElementById("pageTitle");
+      const pageSubtitle = document.getElementById("pageSubtitle");
+      const newPasswordLabel = document.getElementById("newPasswordLabel");
+      const confirmPasswordLabel = document.getElementById("confirmPasswordLabel");
 
       const query = new URLSearchParams(window.location.search);
-      const token = query.get("token");
+      const token = query.get("token")?.trim() ?? "";
+      const consumedToken = sessionStorage.getItem(CONSUMED_TOKEN_KEY);
+      const queryLanguage = query.get("lang");
 
-      function setMessage(text, isError) {
-        msg.textContent = text;
-        msg.className = `msg ${isError ? "error" : "ok"}`;
+      const messages = {
+        en: {
+          documentTitle: "PickDriver - Reset Password",
+          pageTitle: "Reset password",
+          pageSubtitle: "Enter a new password for your account.",
+          newPasswordLabel: "New password",
+          confirmPasswordLabel: "Confirm new password",
+          submitLabel: "Update password",
+          invalidToken: "This link is invalid or missing a token. Request a new one from the app.",
+          minLength: "Password must be at least 8 characters.",
+          mismatch: "Passwords do not match.",
+          loading: "Updating password...",
+          successRedirect: "Password updated. Redirecting...",
+          updateError: "Unable to update password."
+        },
+        es: {
+          documentTitle: "PickDriver - Restablecer Password",
+          pageTitle: "Restablecer password",
+          pageSubtitle: "Introduce una nueva password para tu cuenta.",
+          newPasswordLabel: "Nueva password",
+          confirmPasswordLabel: "Confirmar password",
+          submitLabel: "Actualizar password",
+          invalidToken: "El enlace no es valido o no incluye token. Solicita uno nuevo desde la app.",
+          minLength: "La password debe tener al menos 8 caracteres.",
+          mismatch: "Las passwords no coinciden.",
+          loading: "Actualizando password...",
+          successRedirect: "Password actualizada. Redirigiendo...",
+          updateError: "No se pudo actualizar la password."
+        }
+      };
+
+      function getSupportedLanguage(value) {
+        if (!value) {
+          return null;
+        }
+
+        const normalized = value.trim().toLowerCase();
+        if (!normalized) {
+          return null;
+        }
+
+        if (normalized.startsWith("es")) {
+          return "es";
+        }
+
+        if (normalized.startsWith("en")) {
+          return "en";
+        }
+
+        return null;
+      }
+
+      function resolveLanguage() {
+        const queryValue = getSupportedLanguage(queryLanguage);
+        if (queryValue) {
+          return queryValue;
+        }
+
+        const storedValue = getSupportedLanguage(sessionStorage.getItem(AUTH_LANG_KEY));
+        if (storedValue) {
+          return storedValue;
+        }
+
+        if (Array.isArray(navigator.languages)) {
+          for (const lang of navigator.languages) {
+            const supported = getSupportedLanguage(lang);
+            if (supported) {
+              return supported;
+            }
+          }
+        }
+
+        return getSupportedLanguage(navigator.language) || DEFAULT_LANGUAGE;
+      }
+
+      const language = resolveLanguage();
+      const t = messages[language] || messages[DEFAULT_LANGUAGE];
+      sessionStorage.setItem(AUTH_LANG_KEY, language);
+      document.documentElement.lang = language;
+      document.title = t.documentTitle;
+      pageTitle.textContent = t.pageTitle;
+      pageSubtitle.textContent = t.pageSubtitle;
+      newPasswordLabel.textContent = t.newPasswordLabel;
+      confirmPasswordLabel.textContent = t.confirmPasswordLabel;
+      submit.textContent = t.submitLabel;
+
+      function goToSuccess() {
+        const successURL = new URL(SUCCESS_PATH, window.location.origin);
+        successURL.searchParams.set("lang", language);
+        window.location.replace(`${successURL.pathname}${successURL.search}`);
+      }
+
+      function setStatus(message, kind) {
+        statusBox.textContent = message;
+        statusBox.className = `status status--${kind}`;
+      }
+
+      function showInvalidToken(message) {
+        form.classList.add("hidden");
+        setStatus(message, "error");
+      }
+
+      if (consumedToken && token && consumedToken === token) {
+        goToSuccess();
       }
 
       if (!token) {
-        setMessage("Missing reset token. Request a new password reset email.", true);
-        submit.disabled = true;
+        showInvalidToken(t.invalidToken);
       }
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
 
-        const newPassword = document.getElementById("newPassword").value;
-        const confirmPassword = document.getElementById("confirmPassword").value;
-
-        if (newPassword.length < 8) {
-          setMessage("Password must be at least 8 characters.", true);
+        if (!token) {
+          showInvalidToken(t.invalidToken);
           return;
         }
+
+        const newPassword = newPasswordInput.value;
+        const confirmPassword = confirmPasswordInput.value;
+
+        if (newPassword.length < 8) {
+          setStatus(t.minLength, "error");
+          return;
+        }
+
         if (newPassword !== confirmPassword) {
-          setMessage("Passwords do not match.", true);
+          setStatus(t.mismatch, "error");
           return;
         }
 
         submit.disabled = true;
-        setMessage("Updating password...", false);
+        setStatus(t.loading, "loading");
 
         try {
           const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
@@ -127,17 +362,15 @@
           });
 
           const data = await response.json().catch(() => ({}));
-
           if (!response.ok) {
-            const reason = data.reason || "Unable to reset password.";
-            throw new Error(reason);
+            throw new Error(data.reason || t.updateError);
           }
 
-          setMessage("Password updated successfully. You can return to the app and sign in.", false);
-          form.reset();
+          sessionStorage.setItem(CONSUMED_TOKEN_KEY, token);
+          setStatus(t.successRedirect, "ok");
+          goToSuccess();
         } catch (error) {
-          setMessage(error.message || "Unable to reset password.", true);
-        } finally {
+          setStatus(error.message || t.updateError, "error");
           submit.disabled = false;
         }
       });

@@ -36,6 +36,7 @@ private struct CapturingEmailService: EmailService {
         to email: String,
         username: String,
         verificationLink: String,
+        language: AuthLanguage,
         on req: Request
     ) async throws {
         await captured.appendVerification(verificationLink)
@@ -45,6 +46,7 @@ private struct CapturingEmailService: EmailService {
         to email: String,
         username: String,
         resetLink: String,
+        language: AuthLanguage,
         on req: Request
     ) async throws {
         await captured.appendReset(resetLink)
@@ -199,6 +201,13 @@ final class AuthTests: XCTestCase {
                     .first(where: { $0.name == "token" })?
                     .value
             )
+            let lang = try XCTUnwrap(
+                URLComponents(string: verificationLink)?
+                    .queryItems?
+                    .first(where: { $0.name == "lang" })?
+                    .value
+            )
+            XCTAssertEqual(lang, "en")
 
             try await app.test(.GET, "/api/auth/verify-email-link?token=\(token)", afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .ok)
@@ -272,6 +281,13 @@ final class AuthTests: XCTestCase {
                     .first(where: { $0.name == "token" })?
                     .value
             )
+            let lang = try XCTUnwrap(
+                URLComponents(string: resetLink)?
+                    .queryItems?
+                    .first(where: { $0.name == "lang" })?
+                    .value
+            )
+            XCTAssertEqual(lang, "en")
 
             try await app.test(.POST, "/api/auth/reset-password", beforeRequest: { req async throws in
                 try req.content.encode([
@@ -405,6 +421,34 @@ final class AuthTests: XCTestCase {
             }, afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .unauthorized)
             })
+        }
+    }
+
+    func testVerificationEmailLinkUsesSpanishFromAcceptLanguageHeader() async throws {
+        try await withTestApp { app in
+            let captured = CapturedEmails()
+            app.emailService = CapturingEmailService(captured: captured)
+
+            try await app.test(.POST, "/api/auth/register", beforeRequest: { req async throws in
+                req.headers.replaceOrAdd(name: "Accept-Language", value: "es-ES,es;q=0.9,en;q=0.8")
+                try req.content.encode([
+                    "username": "verify_lang_\(UUID().uuidString.prefix(8))",
+                    "email": "verify_lang_\(UUID().uuidString.prefix(8))@test.com",
+                    "password": "12345678"
+                ])
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+            })
+
+            let latestVerificationLink = await captured.latestVerification()
+            let verificationLink = try XCTUnwrap(latestVerificationLink)
+            let lang = try XCTUnwrap(
+                URLComponents(string: verificationLink)?
+                    .queryItems?
+                    .first(where: { $0.name == "lang" })?
+                    .value
+            )
+            XCTAssertEqual(lang, "es")
         }
     }
 }
