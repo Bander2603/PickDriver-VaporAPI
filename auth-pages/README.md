@@ -3,6 +3,11 @@
 Minimal static pages for:
 - `/email-verified`
 - `/reset-password`
+- `/reset-password/success`
+
+Language behavior:
+- Supported languages: `en` (default) and `es`
+- Pages resolve language from `?lang=` first, then browser/system language.
 
 Also includes Universal Links files:
 - `/.well-known/apple-app-site-association`

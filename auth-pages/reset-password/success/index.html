@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PickDriver - Email Verification</title>
+    <title>PickDriver - Password Updated</title>
     <style>
       :root {
         --pd-bg: #0b0d12;
@@ -11,8 +11,9 @@
         --pd-text: #f2f4f8;
         --pd-muted: #9aa3b2;
         --pd-border: #2a3140;
+        --pd-accent: #e10600;
+        --pd-accent-strong: #ff3b2f;
         --pd-success: #38d27f;
-        --pd-error: #ff5b67;
       }
 
       * {
@@ -81,7 +82,9 @@
         margin-top: 16px;
         padding: 12px 14px;
         border-radius: 12px;
-        border: 1px solid transparent;
+        border: 1px solid rgba(56, 210, 127, 0.35);
+        color: var(--pd-success);
+        background: rgba(56, 210, 127, 0.08);
         font-size: 0.95rem;
         line-height: 1.45;
         font-weight: 700;
@@ -89,59 +92,61 @@
         letter-spacing: 0.07em;
       }
 
-      .status--ok {
-        color: var(--pd-success);
-        border-color: rgba(56, 210, 127, 0.35);
-        background: rgba(56, 210, 127, 0.08);
+      .cta {
+        margin-top: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 18px;
+        text-transform: uppercase;
+        letter-spacing: 0.11em;
+        font-weight: 700;
+        text-decoration: none;
+        color: #fff;
+        background: linear-gradient(120deg, var(--pd-accent), var(--pd-accent-strong));
+        box-shadow: 0 10px 22px rgba(225, 6, 0, 0.28);
       }
 
-      .status--error {
-        color: var(--pd-error);
-        border-color: rgba(255, 91, 103, 0.35);
-        background: rgba(255, 91, 103, 0.08);
+      .cta:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 28px rgba(225, 6, 0, 0.36);
       }
     </style>
   </head>
   <body>
     <main class="status-card">
       <p class="brand">PickDriver</p>
-      <h1 id="pageTitle">Email verification</h1>
-      <p class="detail" id="detail">Checking verification status...</p>
-      <div class="status" id="status"></div>
+      <h1 id="pageTitle">Password updated</h1>
+      <p class="detail" id="detail">Your new password is saved and the recovery link is now invalid.</p>
+      <div class="status" id="status">Change completed</div>
+      <a class="cta" id="cta" href="https://pickdriver.cc/login">Go to web login</a>
     </main>
-
     <script>
       const params = new URLSearchParams(window.location.search);
-      const status = params.get("status");
       const queryLanguage = params.get("lang");
       const DEFAULT_LANGUAGE = "en";
 
       const pageTitle = document.getElementById("pageTitle");
       const detail = document.getElementById("detail");
-      const statusEl = document.getElementById("status");
+      const status = document.getElementById("status");
+      const cta = document.getElementById("cta");
 
       const messages = {
         en: {
-          documentTitle: "PickDriver - Email Verification",
-          pageTitle: "Email verification",
-          checking: "Checking verification status...",
-          successDetail: "Your email is verified. You can now sign in to PickDriver.",
-          successStatus: "Verification complete",
-          invalidDetail: "This link is invalid or expired. Request a new verification email from the app.",
-          invalidStatus: "Verification failed",
-          unknownDetail: "Verification status was not provided. Request a new link if needed.",
-          unknownStatus: "Unknown status"
+          documentTitle: "PickDriver - Password Updated",
+          pageTitle: "Password updated",
+          detail: "Your new password is saved and the recovery link is now invalid.",
+          status: "Change completed",
+          cta: "Go to web login"
         },
         es: {
-          documentTitle: "PickDriver - Verificacion de Email",
-          pageTitle: "Verificacion de email",
-          checking: "Comprobando estado de verificacion...",
-          successDetail: "Tu email ya esta verificado. Puedes iniciar sesion en PickDriver.",
-          successStatus: "Verificacion completada",
-          invalidDetail: "Este enlace es invalido o ha caducado. Solicita un nuevo email desde la app.",
-          invalidStatus: "Verificacion fallida",
-          unknownDetail: "No se recibio un estado de verificacion. Si hace falta, solicita un nuevo enlace.",
-          unknownStatus: "Estado desconocido"
+          documentTitle: "PickDriver - Password Actualizada",
+          pageTitle: "Password actualizada",
+          detail: "La nueva password ya esta guardada y el enlace de recuperacion ha quedado invalidado.",
+          status: "Cambio completado",
+          cta: "Ir al login web"
         }
       };
 
@@ -189,21 +194,9 @@
       document.documentElement.lang = language;
       document.title = t.documentTitle;
       pageTitle.textContent = t.pageTitle;
-      detail.textContent = t.checking;
-
-      if (status === "success") {
-        detail.textContent = t.successDetail;
-        statusEl.textContent = t.successStatus;
-        statusEl.className = "status status--ok";
-      } else if (status === "invalid") {
-        detail.textContent = t.invalidDetail;
-        statusEl.textContent = t.invalidStatus;
-        statusEl.className = "status status--error";
-      } else {
-        detail.textContent = t.unknownDetail;
-        statusEl.textContent = t.unknownStatus;
-        statusEl.className = "status status--error";
-      }
+      detail.textContent = t.detail;
+      status.textContent = t.status;
+      cta.textContent = t.cta;
     </script>
   </body>
 </html>

@@ -67,6 +67,7 @@ struct ResetPasswordRequest: Content {
 
 struct TokenQuery: Content {
     let token: String
+    let lang: String?
 }
 
 struct AuthMessageResponse: Content {
@@ -125,6 +126,7 @@ struct AuthController: RouteCollection {
         let data = try req.content.decode(RegisterRequest.self)
         let username = normalizeUsername(data.username)
         let email = normalizeEmail(data.email)
+        let language = preferredLanguage(on: req)
 
         guard isValidUsername(username) else {
             throw Abort(.badRequest, reason: "Username must be 3-20 characters and use only letters, numbers, dots, dashes, or underscores.")
@@ -147,7 +149,7 @@ struct AuthController: RouteCollection {
         let user = User(username: username, email: email, passwordHash: hash, emailVerified: false)
         try await user.save(on: req.db)
 
-        let verificationEmailSent = await sendVerificationEmail(for: user, on: req, enforceResendInterval: false)
+        let verificationEmailSent = await sendVerificationEmail(for: user, language: language, on: req, enforceResendInterval: false)
         return RegisterResponse(user: user.convertToPublic(), verificationEmailSent: verificationEmailSent)
     }
 
@@ -178,6 +180,7 @@ struct AuthController: RouteCollection {
     static func resendVerificationHandler(_ req: Request) async throws -> AuthMessageResponse {
         let data = try req.content.decode(ResendVerificationRequest.self)
         let email = normalizeEmail(data.email)
+        let language = preferredLanguage(on: req)
 
         guard isValidEmail(email) else {
             return genericVerificationMessage
@@ -187,7 +190,7 @@ struct AuthController: RouteCollection {
             return genericVerificationMessage
         }
 
-        _ = await sendVerificationEmail(for: user, on: req, enforceResendInterval: true)
+        _ = await sendVerificationEmail(for: user, language: language, on: req, enforceResendInterval: true)
         return genericVerificationMessage
     }
 
@@ -196,9 +199,11 @@ struct AuthController: RouteCollection {
             return try verificationFailureResponse(on: req)
         }
 
+        let language = preferredLanguage(on: req, explicitCode: query.lang)
+
         let rawToken = query.token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawToken.isEmpty, rawToken.count <= 1024 else {
-            return try verificationFailureResponse(on: req)
+            return try verificationFailureResponse(on: req, language: language)
         }
 
         let tokenHash = hashToken(rawToken)
@@ -206,14 +211,14 @@ struct AuthController: RouteCollection {
             .filter(\.$emailVerificationTokenHash == tokenHash)
             .first()
         else {
-            return try verificationFailureResponse(on: req)
+            return try verificationFailureResponse(on: req, language: language)
         }
 
         guard let expiresAt = user.emailVerificationExpiresAt, expiresAt > Date() else {
             user.emailVerificationTokenHash = nil
             user.emailVerificationExpiresAt = nil
             try await user.save(on: req.db)
-            return try verificationFailureResponse(on: req)
+            return try verificationFailureResponse(on: req, language: language)
         }
 
         user.emailVerified = true
@@ -222,12 +227,13 @@ struct AuthController: RouteCollection {
         user.emailVerificationSentAt = nil
         try await user.save(on: req.db)
 
-        return try verificationSuccessResponse(on: req)
+        return try verificationSuccessResponse(on: req, language: language)
     }
 
     static func forgotPasswordHandler(_ req: Request) async throws -> AuthMessageResponse {
         let data = try req.content.decode(ForgotPasswordRequest.self)
         let email = normalizeEmail(data.email)
+        let language = preferredLanguage(on: req)
 
         guard isValidEmail(email) else {
             return genericResetMessage
@@ -237,7 +243,7 @@ struct AuthController: RouteCollection {
             return genericResetMessage
         }
 
-        _ = await sendPasswordResetEmail(for: user, on: req, enforceResendInterval: true)
+        _ = await sendPasswordResetEmail(for: user, language: language, on: req, enforceResendInterval: true)
         return genericResetMessage
     }
 
@@ -245,6 +251,8 @@ struct AuthController: RouteCollection {
         guard let query = try? req.query.decode(TokenQuery.self) else {
             throw Abort(.badRequest, reason: "Reset token is required.")
         }
+
+        let language = preferredLanguage(on: req, explicitCode: query.lang)
 
         let rawToken = query.token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawToken.isEmpty else {
@@ -254,7 +262,10 @@ struct AuthController: RouteCollection {
         if let redirect = req.application.passwordResetRedirectURL {
             let location = addQueryItems(
                 to: redirect,
-                items: [URLQueryItem(name: "token", value: rawToken)]
+                items: [
+                    URLQueryItem(name: "token", value: rawToken),
+                    URLQueryItem(name: "lang", value: language.rawValue)
+                ]
             )
             return req.redirect(to: location)
         }
@@ -569,6 +580,7 @@ struct AuthController: RouteCollection {
 
     private static func sendVerificationEmail(
         for user: User,
+        language: AuthLanguage,
         on req: Request,
         enforceResendInterval: Bool
     ) async -> Bool {
@@ -587,12 +599,16 @@ struct AuthController: RouteCollection {
 
             let verificationLink = addQueryItems(
                 to: req.application.emailVerificationLinkBaseURL,
-                items: [URLQueryItem(name: "token", value: rawToken)]
+                items: [
+                    URLQueryItem(name: "token", value: rawToken),
+                    URLQueryItem(name: "lang", value: language.rawValue)
+                ]
             )
             try await req.application.emailService.sendVerificationEmail(
                 to: user.email,
                 username: user.username,
                 verificationLink: verificationLink,
+                language: language,
                 on: req
             )
             return true
@@ -604,6 +620,7 @@ struct AuthController: RouteCollection {
 
     private static func sendPasswordResetEmail(
         for user: User,
+        language: AuthLanguage,
         on req: Request,
         enforceResendInterval: Bool
     ) async -> Bool {
@@ -622,12 +639,16 @@ struct AuthController: RouteCollection {
 
             let resetLink = addQueryItems(
                 to: req.application.passwordResetLinkBaseURL,
-                items: [URLQueryItem(name: "token", value: rawToken)]
+                items: [
+                    URLQueryItem(name: "token", value: rawToken),
+                    URLQueryItem(name: "lang", value: language.rawValue)
+                ]
             )
             try await req.application.emailService.sendPasswordResetEmail(
                 to: user.email,
                 username: user.username,
                 resetLink: resetLink,
+                language: language,
                 on: req
             )
             return true
@@ -644,11 +665,14 @@ struct AuthController: RouteCollection {
         return now.timeIntervalSince(lastSentAt) < interval
     }
 
-    private static func verificationSuccessResponse(on req: Request) throws -> Response {
+    private static func verificationSuccessResponse(on req: Request, language: AuthLanguage) throws -> Response {
         if let redirect = req.application.emailVerificationSuccessRedirectURL {
             let location = addQueryItems(
                 to: redirect,
-                items: [URLQueryItem(name: "status", value: "success")]
+                items: [
+                    URLQueryItem(name: "status", value: "success"),
+                    URLQueryItem(name: "lang", value: language.rawValue)
+                ]
             )
             return req.redirect(to: location)
         }
@@ -658,11 +682,14 @@ struct AuthController: RouteCollection {
         return response
     }
 
-    private static func verificationFailureResponse(on req: Request) throws -> Response {
+    private static func verificationFailureResponse(on req: Request, language: AuthLanguage = .default) throws -> Response {
         if let redirect = req.application.emailVerificationSuccessRedirectURL {
             let location = addQueryItems(
                 to: redirect,
-                items: [URLQueryItem(name: "status", value: "invalid")]
+                items: [
+                    URLQueryItem(name: "status", value: "invalid"),
+                    URLQueryItem(name: "lang", value: language.rawValue)
+                ]
             )
             return req.redirect(to: location)
         }
@@ -680,6 +707,13 @@ struct AuthController: RouteCollection {
         components.queryItems = queryItems
 
         return components.url?.absoluteString ?? baseURL
+    }
+
+    private static func preferredLanguage(on req: Request, explicitCode: String? = nil) -> AuthLanguage {
+        AuthLanguage.resolve(
+            explicitCode: explicitCode,
+            acceptLanguageHeader: req.headers.first(name: "Accept-Language")
+        )
     }
 
     private static func hashToken(_ token: String) -> String {
