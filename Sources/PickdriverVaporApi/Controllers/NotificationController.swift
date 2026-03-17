@@ -38,12 +38,16 @@ struct NotificationController: RouteCollection {
         guard !trimmedToken.isEmpty else {
             throw Abort(.badRequest, reason: "Invalid device token.")
         }
+        let normalizedPlatform = data.platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedPlatform == "ios" || normalizedPlatform == "android" else {
+            throw Abort(.badRequest, reason: "Invalid platform. Use ios or android.")
+        }
 
         if let existing = try await PushToken.query(on: req.db)
             .filter(\.$token == trimmedToken)
             .first() {
             existing.$user.id = userID
-            existing.platform = data.platform
+            existing.platform = normalizedPlatform
             existing.deviceID = data.deviceID
             existing.isActive = true
             existing.lastSeenAt = Date()
@@ -52,7 +56,7 @@ struct NotificationController: RouteCollection {
             let token = PushToken(
                 userID: userID,
                 token: trimmedToken,
-                platform: data.platform,
+                platform: normalizedPlatform,
                 deviceID: data.deviceID,
                 isActive: true
             )

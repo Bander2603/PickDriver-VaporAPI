@@ -1,3 +1,4 @@
+import Foundation
 import NIOSSL
 import NIOCore
 import Fluent
@@ -149,6 +150,60 @@ public func configure(_ app: Application) async throws {
         app.apnsService = DisabledAPNSService()
     }
 
+    let fcmEnabled = envBool("FCM_ENABLED", default: false)
+    if fcmEnabled {
+        let serviceAccountData: Data
+        if let inlineServiceAccount = envString("FCM_SERVICE_ACCOUNT_JSON") {
+            serviceAccountData = Data(inlineServiceAccount.utf8)
+        } else if let serviceAccountPath = envString("FCM_SERVICE_ACCOUNT_PATH") {
+            do {
+                serviceAccountData = try Data(contentsOf: URL(fileURLWithPath: serviceAccountPath))
+            } catch {
+                throw Abort(.internalServerError, reason: "Could not read FCM service account at FCM_SERVICE_ACCOUNT_PATH=\(serviceAccountPath).")
+            }
+        } else {
+            throw Abort(
+                .internalServerError,
+                reason: "FCM_ENABLED=true but neither FCM_SERVICE_ACCOUNT_PATH nor FCM_SERVICE_ACCOUNT_JSON is configured."
+            )
+        }
+
+        let serviceAccount: FCMServiceAccountFile
+        do {
+            serviceAccount = try JSONDecoder().decode(FCMServiceAccountFile.self, from: serviceAccountData)
+        } catch {
+            throw Abort(.internalServerError, reason: "Could not decode FCM service account JSON.")
+        }
+
+        guard let clientEmail = serviceAccount.clientEmail?.nonEmpty else {
+            throw Abort(.internalServerError, reason: "FCM service account is missing client_email.")
+        }
+        guard let rawPrivateKey = serviceAccount.privateKey?.nonEmpty else {
+            throw Abort(.internalServerError, reason: "FCM service account is missing private_key.")
+        }
+        let privateKeyPEM = rawPrivateKey.replacingOccurrences(of: "\\n", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !privateKeyPEM.isEmpty else {
+            throw Abort(.internalServerError, reason: "FCM service account private_key is empty.")
+        }
+
+        guard let projectID = envString("FCM_PROJECT_ID") ?? serviceAccount.projectID?.nonEmpty else {
+            throw Abort(.internalServerError, reason: "FCM_ENABLED=true but FCM_PROJECT_ID is missing (and not found in service account).")
+        }
+
+        let tokenURI = serviceAccount.tokenURI?.nonEmpty ?? "https://oauth2.googleapis.com/token"
+        let fcmConfig = FCMConfiguration(
+            projectID: projectID,
+            clientEmail: clientEmail,
+            privateKeyPEM: privateKeyPEM,
+            tokenURI: tokenURI
+        )
+        app.fcmService = try LiveFCMService(config: fcmConfig)
+        app.logger.info("FCM enabled for project \(projectID).")
+    } else {
+        app.fcmService = DisabledFCMService()
+    }
+
     // Serve static assets from /Public (used by centralized media files)
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
 
@@ -279,6 +334,20 @@ private func envList(_ key: String) -> [String] {
         .split(separator: ",")
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }
+}
+
+private struct FCMServiceAccountFile: Decodable {
+    let projectID: String?
+    let clientEmail: String?
+    let privateKey: String?
+    let tokenURI: String?
+
+    enum CodingKeys: String, CodingKey {
+        case projectID = "project_id"
+        case clientEmail = "client_email"
+        case privateKey = "private_key"
+        case tokenURI = "token_uri"
+    }
 }
 
 private func makeDrillPostgresConfiguration(

@@ -10,6 +10,23 @@ import SQLKit
 import Vapor
 
 enum NotificationService {
+    private enum PushPlatform: String {
+        case ios
+        case android
+        case unknown
+
+        static func resolve(from raw: String) -> PushPlatform {
+            switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "ios":
+                return .ios
+            case "android":
+                return .android
+            default:
+                return .unknown
+            }
+        }
+    }
+
     private struct RecipientRow: Decodable {
         let user_id: Int
         let league_id: Int
@@ -38,8 +55,6 @@ enum NotificationService {
         on db: any Database,
         app: Application
     ) async {
-        guard app.apnsService.isEnabled else { return }
-
         let recipientID = notification.$user.id
 
         do {
@@ -52,33 +67,70 @@ enum NotificationService {
 
             var delivered = false
             for token in activeTokens {
+                let platform = PushPlatform.resolve(from: token.platform)
                 do {
-                    let result = try await app.apnsService.sendAlert(
-                        title: notification.title,
-                        body: notification.body,
-                        data: notification.data,
-                        to: token.token,
-                        on: app
-                    )
+                    switch platform {
+                    case .ios:
+                        guard app.apnsService.isEnabled else { continue }
 
-                    switch result {
-                    case .delivered:
-                        delivered = true
-                        token.lastSeenAt = Date()
-                        try await token.save(on: db)
+                        let result = try await app.apnsService.sendAlert(
+                            title: notification.title,
+                            body: notification.body,
+                            data: notification.data,
+                            to: token.token,
+                            on: app
+                        )
 
-                    case let .invalidDeviceToken(reason):
-                        token.isActive = false
-                        token.lastSeenAt = Date()
-                        try await token.save(on: db)
-                        app.logger.warning("APNS invalid token deactivated for user \(recipientID). Reason: \(reason)")
+                        switch result {
+                        case .delivered:
+                            delivered = true
+                            token.lastSeenAt = Date()
+                            try await token.save(on: db)
 
-                    case let .rejected(status, reason):
-                        let normalized = reason ?? "n/a"
-                        app.logger.warning("APNS rejected delivery for user \(recipientID). Status: \(status.code). Reason: \(normalized)")
+                        case let .invalidDeviceToken(reason):
+                            token.isActive = false
+                            token.lastSeenAt = Date()
+                            try await token.save(on: db)
+                            app.logger.warning("APNS invalid token deactivated for user \(recipientID). Reason: \(reason)")
+
+                        case let .rejected(status, reason):
+                            let normalized = reason ?? "n/a"
+                            app.logger.warning("APNS rejected delivery for user \(recipientID). Status: \(status.code). Reason: \(normalized)")
+                        }
+
+                    case .android:
+                        guard app.fcmService.isEnabled else { continue }
+
+                        let result = try await app.fcmService.sendAlert(
+                            title: notification.title,
+                            body: notification.body,
+                            data: notification.data,
+                            to: token.token,
+                            on: app
+                        )
+
+                        switch result {
+                        case .delivered:
+                            delivered = true
+                            token.lastSeenAt = Date()
+                            try await token.save(on: db)
+
+                        case let .invalidDeviceToken(reason):
+                            token.isActive = false
+                            token.lastSeenAt = Date()
+                            try await token.save(on: db)
+                            app.logger.warning("FCM invalid token deactivated for user \(recipientID). Reason: \(reason)")
+
+                        case let .rejected(status, reason):
+                            let normalized = reason ?? "n/a"
+                            app.logger.warning("FCM rejected delivery for user \(recipientID). Status: \(status.code). Reason: \(normalized)")
+                        }
+
+                    case .unknown:
+                        app.logger.warning("Skipping push delivery for user \(recipientID): unsupported platform '\(token.platform)'.")
                     }
                 } catch {
-                    app.logger.warning("APNS delivery error for user \(recipientID): \(error.localizedDescription)")
+                    app.logger.warning("Push delivery error for user \(recipientID), platform=\(token.platform): \(error.localizedDescription)")
                 }
             }
 

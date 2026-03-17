@@ -128,8 +128,11 @@ struct InternalOpsController: RouteCollection {
     }
 
     func testPush(_ req: Request) async throws -> PushTestResponse {
-        guard req.application.apnsService.isEnabled else {
-            throw Abort(.badRequest, reason: "APNS is disabled. Enable APNS_* environment variables first.")
+        if !req.application.apnsService.isEnabled && !req.application.fcmService.isEnabled {
+            throw Abort(
+                .badRequest,
+                reason: "Push providers are disabled. Enable APNS_* and/or FCM_* environment variables first."
+            )
         }
 
         let payload = try req.content.decode(PushTestRequest.self)
@@ -161,45 +164,124 @@ struct InternalOpsController: RouteCollection {
 
         for token in activeTokens {
             do {
-                let result = try await req.application.apnsService.sendAlert(
-                    title: resolvedTitle,
-                    body: resolvedBody,
-                    data: notificationData,
-                    to: token.token,
-                    on: req.application
-                )
+                let platform = token.platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
-                switch result {
-                case .delivered:
-                    delivered += 1
-                    token.lastSeenAt = Date()
-                    try await token.save(on: req.db)
-                    results.append(.init(
-                        tokenID: token.id,
-                        tokenSuffix: String(token.token.suffix(8)),
-                        status: "delivered",
-                        reason: nil
-                    ))
+                switch platform {
+                case "ios":
+                    guard req.application.apnsService.isEnabled else {
+                        failed += 1
+                        results.append(.init(
+                            tokenID: token.id,
+                            tokenSuffix: String(token.token.suffix(8)),
+                            status: "skipped",
+                            reason: "APNS is disabled for iOS token."
+                        ))
+                        continue
+                    }
 
-                case let .invalidDeviceToken(reason):
-                    invalidated += 1
-                    token.isActive = false
-                    token.lastSeenAt = Date()
-                    try await token.save(on: req.db)
-                    results.append(.init(
-                        tokenID: token.id,
-                        tokenSuffix: String(token.token.suffix(8)),
-                        status: "invalidated",
-                        reason: reason
-                    ))
+                    let result = try await req.application.apnsService.sendAlert(
+                        title: resolvedTitle,
+                        body: resolvedBody,
+                        data: notificationData,
+                        to: token.token,
+                        on: req.application
+                    )
 
-                case let .rejected(status, reason):
+                    switch result {
+                    case .delivered:
+                        delivered += 1
+                        token.lastSeenAt = Date()
+                        try await token.save(on: req.db)
+                        results.append(.init(
+                            tokenID: token.id,
+                            tokenSuffix: String(token.token.suffix(8)),
+                            status: "delivered",
+                            reason: nil
+                        ))
+
+                    case let .invalidDeviceToken(reason):
+                        invalidated += 1
+                        token.isActive = false
+                        token.lastSeenAt = Date()
+                        try await token.save(on: req.db)
+                        results.append(.init(
+                            tokenID: token.id,
+                            tokenSuffix: String(token.token.suffix(8)),
+                            status: "invalidated",
+                            reason: reason
+                        ))
+
+                    case let .rejected(status, reason):
+                        failed += 1
+                        results.append(.init(
+                            tokenID: token.id,
+                            tokenSuffix: String(token.token.suffix(8)),
+                            status: "rejected",
+                            reason: reason ?? "HTTP \(status.code)"
+                        ))
+                    }
+
+                case "android":
+                    guard req.application.fcmService.isEnabled else {
+                        failed += 1
+                        results.append(.init(
+                            tokenID: token.id,
+                            tokenSuffix: String(token.token.suffix(8)),
+                            status: "skipped",
+                            reason: "FCM is disabled for Android token."
+                        ))
+                        continue
+                    }
+
+                    let result = try await req.application.fcmService.sendAlert(
+                        title: resolvedTitle,
+                        body: resolvedBody,
+                        data: notificationData,
+                        to: token.token,
+                        on: req.application
+                    )
+
+                    switch result {
+                    case .delivered:
+                        delivered += 1
+                        token.lastSeenAt = Date()
+                        try await token.save(on: req.db)
+                        results.append(.init(
+                            tokenID: token.id,
+                            tokenSuffix: String(token.token.suffix(8)),
+                            status: "delivered",
+                            reason: nil
+                        ))
+
+                    case let .invalidDeviceToken(reason):
+                        invalidated += 1
+                        token.isActive = false
+                        token.lastSeenAt = Date()
+                        try await token.save(on: req.db)
+                        results.append(.init(
+                            tokenID: token.id,
+                            tokenSuffix: String(token.token.suffix(8)),
+                            status: "invalidated",
+                            reason: reason
+                        ))
+
+                    case let .rejected(status, reason):
+                        failed += 1
+                        results.append(.init(
+                            tokenID: token.id,
+                            tokenSuffix: String(token.token.suffix(8)),
+                            status: "rejected",
+                            reason: reason ?? "HTTP \(status.code)"
+                        ))
+                    }
+
+                default:
                     failed += 1
                     results.append(.init(
                         tokenID: token.id,
                         tokenSuffix: String(token.token.suffix(8)),
-                        status: "rejected",
-                        reason: reason ?? "HTTP \(status.code)"
+                        status: "skipped",
+                        reason: "Unsupported platform '\(token.platform)'."
                     ))
                 }
             } catch {
