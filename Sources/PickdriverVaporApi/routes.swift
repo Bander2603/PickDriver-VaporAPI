@@ -1,6 +1,46 @@
 import Fluent
 import Vapor
 import SQLKit
+import Foundation
+
+private struct ComplianceQuery: Content {
+    let lang: String?
+}
+
+private func complianceLanguage(for req: Request) -> String {
+    if let pathLang = req.parameters.get("lang")?.lowercased() {
+        if pathLang.hasPrefix("en") { return "en" }
+        if pathLang.hasPrefix("es") { return "es" }
+    }
+
+    if
+        let query = try? req.query.decode(ComplianceQuery.self),
+        let queryLang = query.lang?.lowercased()
+    {
+        if queryLang.hasPrefix("en") { return "en" }
+        if queryLang.hasPrefix("es") { return "es" }
+    }
+
+    if let acceptLanguage = req.headers.first(name: "Accept-Language")?.lowercased(),
+       acceptLanguage.contains("en")
+    {
+        return "en"
+    }
+
+    return "es"
+}
+
+private func complianceFilePath(req: Request, folder: String) -> String {
+    let publicDir = req.application.directory.publicDirectory
+    let spanishPath = publicDir + "\(folder)/index.html"
+    let englishPath = publicDir + "\(folder)/index.en.html"
+
+    if complianceLanguage(for: req) == "en", FileManager.default.fileExists(atPath: englishPath) {
+        return englishPath
+    }
+
+    return spanishPath
+}
 
 func routes(_ app: Application) throws {
     try app.register(collection: AuthController())
@@ -8,13 +48,25 @@ func routes(_ app: Application) throws {
     // Public compliance pages (Google Play privacy/account deletion).
     app.get("privacy") { req async throws -> Response in
         try await req.fileio.asyncStreamFile(
-            at: req.application.directory.publicDirectory + "privacy/index.html"
+            at: complianceFilePath(req: req, folder: "privacy")
+        )
+    }
+
+    app.get("privacy", ":lang") { req async throws -> Response in
+        try await req.fileio.asyncStreamFile(
+            at: complianceFilePath(req: req, folder: "privacy")
         )
     }
 
     app.get("account-deletion") { req async throws -> Response in
         try await req.fileio.asyncStreamFile(
-            at: req.application.directory.publicDirectory + "account-deletion/index.html"
+            at: complianceFilePath(req: req, folder: "account-deletion")
+        )
+    }
+
+    app.get("account-deletion", ":lang") { req async throws -> Response in
+        try await req.fileio.asyncStreamFile(
+            at: complianceFilePath(req: req, folder: "account-deletion")
         )
     }
 
