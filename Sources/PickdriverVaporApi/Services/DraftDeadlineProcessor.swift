@@ -16,6 +16,9 @@ struct DraftDeadlineProcessor {
         let pick_order: [Int]
         let current_pick_index: Int
         let mirror_picks: Bool
+        let protected_repick_user_id: Int?
+        let protected_repick_pick_index: Int?
+        let protected_repick_deadline: Date?
         let fp1_time: Date
         let race_time: Date?
     }
@@ -37,6 +40,9 @@ struct DraftDeadlineProcessor {
                     rd.pick_order AS pick_order,
                     rd.current_pick_index AS current_pick_index,
                     rd.mirror_picks AS mirror_picks,
+                    rd.protected_repick_user_id AS protected_repick_user_id,
+                    rd.protected_repick_pick_index AS protected_repick_pick_index,
+                    rd.protected_repick_deadline AS protected_repick_deadline,
                     r.fp1_time AS fp1_time,
                     r.race_time AS race_time
                 FROM race_drafts rd
@@ -51,7 +57,7 @@ struct DraftDeadlineProcessor {
                     continue
                 }
 
-                let firstHalfDeadline = Calendar.current.date(byAdding: .hour, value: -36, to: row.fp1_time)!
+                let firstHalfDeadline = row.fp1_time.addingTimeInterval(-36 * 3600)
                 let deadlines = DraftDeadline(
                     raceID: row.race_id,
                     leagueID: row.league_id,
@@ -66,6 +72,11 @@ struct DraftDeadlineProcessor {
                         pickOrder: row.pick_order,
                         currentPickIndex: row.current_pick_index,
                         mirrorPicks: row.mirror_picks,
+                        protectedRepick: protectedRepickState(
+                            userID: row.protected_repick_user_id,
+                            pickIndex: row.protected_repick_pick_index,
+                            deadline: row.protected_repick_deadline
+                        ),
                         deadlines: deadlines,
                         now: now,
                         sql: sql
@@ -85,6 +96,7 @@ struct DraftDeadlineProcessor {
         pickOrder: [Int],
         currentPickIndex: Int,
         mirrorPicks: Bool,
+        protectedRepick: ProtectedRepickState?,
         deadlines: DraftDeadline,
         now: Date,
         sql: any SQLDatabase
@@ -93,12 +105,16 @@ struct DraftDeadlineProcessor {
 
         var index = currentPickIndex
         var advanced = false
-        let firstHalfCount = (pickOrder.count + 1) / 2
 
         while index < pickOrder.count {
             let currentTurnUserID = pickOrder[index]
             let deletedUser = try await isDeletedUser(userID: currentTurnUserID, sql: sql)
-            let deadline = index < firstHalfCount ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
+            let deadline = effectiveDeadlineForPickIndex(
+                pickIndex: index,
+                totalPickCount: pickOrder.count,
+                deadlines: deadlines,
+                protectedRepick: protectedRepick
+            )
 
             if !deletedUser && now <= deadline {
                 break
@@ -121,9 +137,19 @@ struct DraftDeadlineProcessor {
         }
 
         if advanced {
+            let remainingProtectedRepick: ProtectedRepickState? = {
+                guard let protectedRepick, index <= protectedRepick.pickIndex else {
+                    return nil
+                }
+                return protectedRepick
+            }()
+
             let row = try await sql.raw("""
                 UPDATE race_drafts
                 SET current_pick_index = GREATEST(current_pick_index, \(bind: index))
+                  , protected_repick_user_id = \(bind: remainingProtectedRepick?.userID)
+                  , protected_repick_pick_index = \(bind: remainingProtectedRepick?.pickIndex)
+                  , protected_repick_deadline = \(bind: remainingProtectedRepick?.deadline)
                 WHERE id = \(bind: draftID)
                 RETURNING current_pick_index
             """).first(decoding: [String: Int].self)
@@ -218,5 +244,17 @@ struct DraftDeadlineProcessor {
         }
 
         return nil
+    }
+
+    private static func protectedRepickState(
+        userID: Int?,
+        pickIndex: Int?,
+        deadline: Date?
+    ) -> ProtectedRepickState? {
+        guard let userID, let pickIndex, let deadline else {
+            return nil
+        }
+
+        return ProtectedRepickState(userID: userID, pickIndex: pickIndex, deadline: deadline)
     }
 }

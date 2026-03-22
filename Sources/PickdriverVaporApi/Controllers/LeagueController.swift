@@ -486,21 +486,24 @@ struct LeagueController: RouteCollection {
             throw Abort(.notFound, reason: "Race not found or FP1 time missing.")
         }
 
-        guard (try await RaceDraft.query(on: req.db)
+        guard let draft = try await RaceDraft.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .filter(\.$raceID == raceID)
-            .first()) != nil else {
+            .first() else {
             throw Abort(.notFound, reason: "Draft not found for that race.")
         }
 
-        let firstHalfDeadline = Calendar.current.date(byAdding: .hour, value: -36, to: fp1)!
+        let firstHalfDeadline = fp1.addingTimeInterval(-36 * 3600)
         let secondHalfDeadline = fp1
 
         return DraftDeadline(
             raceID: raceID,
             leagueID: leagueID,
             firstHalfDeadline: firstHalfDeadline,
-            secondHalfDeadline: secondHalfDeadline
+            secondHalfDeadline: secondHalfDeadline,
+            protectedRepickUserID: draft.protectedRepickUserID,
+            protectedRepickPickIndex: draft.protectedRepickPickIndex,
+            protectedRepickDeadline: draft.protectedRepickDeadline
         )
     }
 
@@ -592,6 +595,9 @@ struct LeagueController: RouteCollection {
         let bansUsedByUserID: [String: Int]
         let bansUsedByTeamID: [String: Int]
         let banLimitPerActor: Int
+        let protectedRepickUserID: Int?
+        let protectedRepickPickIndex: Int?
+        let protectedRepickDeadline: Date?
     }
 
     func getRaceDraft(_ req: Request) async throws -> RaceDraftResponse {
@@ -755,7 +761,10 @@ struct LeagueController: RouteCollection {
             bannedByUserIDsByPickIndex: bannedByUserIDsByPickIndex,
             bansUsedByUserID: bansUsedByUserIDStringKey,
             bansUsedByTeamID: bansUsedByTeamID,
-            banLimitPerActor: banLimitPerActor
+            banLimitPerActor: banLimitPerActor,
+            protectedRepickUserID: draft.protectedRepickUserID,
+            protectedRepickPickIndex: draft.protectedRepickPickIndex,
+            protectedRepickDeadline: draft.protectedRepickDeadline
         )
     }
 

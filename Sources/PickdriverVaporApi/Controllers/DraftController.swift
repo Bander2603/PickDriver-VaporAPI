@@ -11,12 +11,16 @@ import SQLKit
 
 struct DraftController: RouteCollection {
     private static let teammatePickWindowOffset: TimeInterval = 3600
+    private static let protectedRepickMinimumWindow: TimeInterval = 10 * 60
 
     private struct LockedDraftRow: Decodable {
         let id: Int
         let pick_order: [Int]
         let current_pick_index: Int
         let mirror_picks: Bool
+        let protected_repick_user_id: Int?
+        let protected_repick_pick_index: Int?
+        let protected_repick_deadline: Date?
     }
 
     private struct ExistingPickRow: Decodable {
@@ -93,6 +97,7 @@ struct DraftController: RouteCollection {
             let draft = try await lockDraft(leagueID: leagueID, raceID: raceID, sql: sql)
             let draftID = draft.id
             let pickOrder = draft.pick_order
+            let protectedRepick = protectedRepickState(from: draft)
             guard !pickOrder.isEmpty else {
                 throw Abort(.badRequest, reason: "Draft is already completed")
             }
@@ -103,6 +108,7 @@ struct DraftController: RouteCollection {
                 pickOrder: pickOrder,
                 currentPickIndex: draft.current_pick_index,
                 mirrorPicks: draft.mirror_picks,
+                protectedRepick: protectedRepick,
                 deadlines: deadlines,
                 now: now,
                 sql: sql
@@ -164,7 +170,8 @@ struct DraftController: RouteCollection {
                 let editableDeadline = deadlineForPickIndex(
                     pickIndex: editableIndex,
                     totalPickCount: pickOrder.count,
-                    deadlines: deadlines
+                    deadlines: deadlines,
+                    protectedRepick: protectedRepick
                 )
                 guard now <= editableDeadline else {
                     throw Abort(.conflict, reason: "Your turn is no longer active")
@@ -301,10 +308,17 @@ struct DraftController: RouteCollection {
 
             var notification: PendingTurnNotification?
             if !editedExistingPick {
+                let remainingProtectedRepick = remainingProtectedRepickAfterResolvedPick(
+                    pickIndex: pickIndex,
+                    protectedRepick: protectedRepick
+                )
                 currentPickIndex += 1
                 try await sql.raw("""
                     UPDATE race_drafts
                     SET current_pick_index = \(bind: currentPickIndex),
+                        protected_repick_user_id = \(bind: remainingProtectedRepick?.userID),
+                        protected_repick_pick_index = \(bind: remainingProtectedRepick?.pickIndex),
+                        protected_repick_deadline = \(bind: remainingProtectedRepick?.deadline),
                         updated_at = NOW()
                     WHERE id = \(bind: draftID)
                 """).run()
@@ -315,6 +329,7 @@ struct DraftController: RouteCollection {
                     pickOrder: pickOrder,
                     currentPickIndex: currentPickIndex,
                     mirrorPicks: draft.mirror_picks,
+                    protectedRepick: remainingProtectedRepick,
                     deadlines: deadlines,
                     now: now,
                     sql: sql
@@ -395,6 +410,7 @@ struct DraftController: RouteCollection {
             let draft = try await lockDraft(leagueID: leagueID, raceID: raceID, sql: sql)
             let draftID = draft.id
             let pickOrder = draft.pick_order
+            let protectedRepick = protectedRepickState(from: draft)
 
             // Prevent banning the last player in the draft.
             let isLastInOrder = pickOrder.last == data.targetUserID
@@ -421,6 +437,7 @@ struct DraftController: RouteCollection {
                 pickOrder: pickOrder,
                 currentPickIndex: draft.current_pick_index,
                 mirrorPicks: draft.mirror_picks,
+                protectedRepick: protectedRepick,
                 deadlines: deadlines,
                 now: now,
                 sql: sql
@@ -436,6 +453,10 @@ struct DraftController: RouteCollection {
             let currentTurnUserID = pickOrder[currentPickIndex]
             let targetIndex = currentPickIndex - 1
             let expectedTargetUserID = pickOrder[targetIndex]
+
+            if protectedRepick?.pickIndex == currentPickIndex {
+                throw Abort(.forbidden, reason: "Bans are disabled during a protected repick.")
+            }
 
             guard league.bansEnabled else {
                 throw Abort(.badRequest, reason: "Bans are disabled in this league")
@@ -554,10 +575,13 @@ struct DraftController: RouteCollection {
                   AND user_id = \(bind: data.targetUserID)
                   AND driver_id = \(bind: data.driverID)
             """).run()
-
-            if userID == pickOrder.first && data.targetUserID == pickOrder.last && now < deadlines.firstHalfDeadline {
-                req.logger.notice("Drafts: special deadline handling triggered")
-            }
+            let updatedProtectedRepick = try protectedRepickStateAfterBan(
+                targetUserID: data.targetUserID,
+                targetIndex: targetIndex,
+                totalPickCount: pickOrder.count,
+                deadlines: deadlines,
+                now: now
+            )
 
             let bannedDriverIDs = try await sql.raw("""
                 SELECT driver_id FROM player_picks
@@ -576,6 +600,9 @@ struct DraftController: RouteCollection {
             try await sql.raw("""
                 UPDATE race_drafts
                 SET current_pick_index = \(bind: currentPickIndex),
+                    protected_repick_user_id = \(bind: updatedProtectedRepick?.userID),
+                    protected_repick_pick_index = \(bind: updatedProtectedRepick?.pickIndex),
+                    protected_repick_deadline = \(bind: updatedProtectedRepick?.deadline),
                     updated_at = NOW()
                 WHERE id = \(bind: draftID)
             """).run()
@@ -586,6 +613,7 @@ struct DraftController: RouteCollection {
                 pickOrder: pickOrder,
                 currentPickIndex: currentPickIndex,
                 mirrorPicks: draft.mirror_picks,
+                protectedRepick: updatedProtectedRepick,
                 deadlines: deadlines,
                 now: now,
                 sql: sql
@@ -630,7 +658,14 @@ struct DraftController: RouteCollection {
         sql: any SQLDatabase
     ) async throws -> LockedDraftRow {
         guard let draft = try await sql.raw("""
-            SELECT id, pick_order, current_pick_index, mirror_picks
+            SELECT
+                id,
+                pick_order,
+                current_pick_index,
+                mirror_picks,
+                protected_repick_user_id,
+                protected_repick_pick_index,
+                protected_repick_deadline
             FROM race_drafts
             WHERE league_id = \(bind: leagueID)
               AND race_id = \(bind: raceID)
@@ -647,7 +682,7 @@ struct DraftController: RouteCollection {
             throw Abort(.notFound, reason: "Race not found or FP1 time missing.")
         }
 
-        let firstHalfDeadline = Calendar.current.date(byAdding: .hour, value: -36, to: fp1)!
+        let firstHalfDeadline = fp1.addingTimeInterval(-36 * 3600)
         return DraftDeadline(
             raceID: raceID,
             leagueID: leagueID,
@@ -659,10 +694,76 @@ struct DraftController: RouteCollection {
     private func deadlineForPickIndex(
         pickIndex: Int,
         totalPickCount: Int,
-        deadlines: DraftDeadline
+        deadlines: DraftDeadline,
+        protectedRepick: ProtectedRepickState?
     ) -> Date {
-        let firstHalfCount = (totalPickCount + 1) / 2
-        return pickIndex < firstHalfCount ? deadlines.firstHalfDeadline : deadlines.secondHalfDeadline
+        effectiveDeadlineForPickIndex(
+            pickIndex: pickIndex,
+            totalPickCount: totalPickCount,
+            deadlines: deadlines,
+            protectedRepick: protectedRepick
+        )
+    }
+
+    private func protectedRepickState(from draft: LockedDraftRow) -> ProtectedRepickState? {
+        protectedRepickState(
+            userID: draft.protected_repick_user_id,
+            pickIndex: draft.protected_repick_pick_index,
+            deadline: draft.protected_repick_deadline
+        )
+    }
+
+    private func protectedRepickState(
+        userID: Int?,
+        pickIndex: Int?,
+        deadline: Date?
+    ) -> ProtectedRepickState? {
+        guard let userID, let pickIndex, let deadline else {
+            return nil
+        }
+
+        return ProtectedRepickState(userID: userID, pickIndex: pickIndex, deadline: deadline)
+    }
+
+    private func remainingProtectedRepickAfterResolvedPick(
+        pickIndex: Int,
+        protectedRepick: ProtectedRepickState?
+    ) -> ProtectedRepickState? {
+        guard let protectedRepick, protectedRepick.pickIndex != pickIndex else {
+            return nil
+        }
+
+        return protectedRepick
+    }
+
+    private func protectedRepickStateAfterBan(
+        targetUserID: Int,
+        targetIndex: Int,
+        totalPickCount: Int,
+        deadlines: DraftDeadline,
+        now: Date
+    ) throws -> ProtectedRepickState? {
+        let regularDeadline = deadlineForPickIndex(
+            pickIndex: targetIndex,
+            totalPickCount: totalPickCount,
+            deadlines: deadlines,
+            protectedRepick: nil
+        )
+        let minimumAllowedDeadline = now.addingTimeInterval(Self.protectedRepickMinimumWindow)
+
+        guard regularDeadline < minimumAllowedDeadline else {
+            return nil
+        }
+
+        guard deadlines.secondHalfDeadline >= minimumAllowedDeadline else {
+            throw Abort(.badRequest, reason: "Ban too late to guarantee a fair repick window.")
+        }
+
+        return ProtectedRepickState(
+            userID: targetUserID,
+            pickIndex: targetIndex,
+            deadline: deadlines.secondHalfDeadline
+        )
     }
 
     private func areTeammates(

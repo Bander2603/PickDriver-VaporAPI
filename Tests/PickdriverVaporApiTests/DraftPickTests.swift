@@ -237,6 +237,28 @@ final class DraftPickTests: XCTestCase {
         return dto
     }
 
+    private func banPickError(
+        app: Application,
+        token: String,
+        leagueID: Int,
+        raceID: Int,
+        targetUserID: Int,
+        driverID: Int,
+        expectedStatus: HTTPResponseStatus
+    ) async throws -> APIErrorResponse {
+        var error: APIErrorResponse?
+
+        try await app.test(.POST, "/api/leagues/\(leagueID)/draft/\(raceID)/ban", beforeRequest: { req async throws in
+            req.headers.bearerAuthorization = .init(token: token)
+            try req.content.encode(BanPayload(targetUserID: targetUserID, driverID: driverID))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, expectedStatus)
+            error = try res.content.decode(APIErrorResponse.self)
+        })
+
+        return try XCTUnwrap(error)
+    }
+
     // MARK: - Helpers (DB)
 
     private func sql(_ app: Application) throws -> any SQLDatabase {
@@ -260,6 +282,29 @@ final class DraftPickTests: XCTestCase {
 
         let r = try XCTUnwrap(row, "race_drafts row not found")
         return (draftID: r.id, currentPickIndex: r.current_pick_index, pickOrder: r.pick_order)
+    }
+
+    private func fetchProtectedRepickState(
+        app: Application,
+        leagueID: Int,
+        raceID: Int
+    ) async throws -> (userID: Int?, pickIndex: Int?, deadline: Date?) {
+        let sql = try sql(app)
+        struct Row: Decodable {
+            let protected_repick_user_id: Int?
+            let protected_repick_pick_index: Int?
+            let protected_repick_deadline: Date?
+        }
+
+        let row = try await sql.raw("""
+            SELECT protected_repick_user_id, protected_repick_pick_index, protected_repick_deadline
+            FROM race_drafts
+            WHERE league_id = \(bind: leagueID) AND race_id = \(bind: raceID)
+            LIMIT 1
+        """).first(decoding: Row.self)
+
+        let r = try XCTUnwrap(row, "race_drafts row not found")
+        return (userID: r.protected_repick_user_id, pickIndex: r.protected_repick_pick_index, deadline: r.protected_repick_deadline)
     }
 
     private func fetchPickRow(app: Application, draftID: Int, userID: Int, driverID: Int) async throws -> (isBanned: Bool, bannedBy: Int?)? {
@@ -825,6 +870,156 @@ final class DraftPickTests: XCTestCase {
                 driverID: pickedDriverID,
                 expectedStatus: .ok
             )
+        }
+    }
+
+    func testBanPickProtectsReopenedDeadlineOneSlotUntilSecondDeadline() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraft3Players(app: app)
+
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertEqual(order.count, 3)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+            let thirdUserID = order[2]
+
+            let firstDriver = seeded.driverIDs[0]
+            let secondDriver = seeded.driverIDs[1]
+            let replacementDriver = seeded.driverIDs[2]
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: firstDriver,
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: secondDriver,
+                expectedStatus: .ok
+            )
+
+            guard let race = try await Race.find(seeded.raceID, on: app.db) else {
+                XCTFail("Race not found")
+                return
+            }
+            let protectedFP1 = Date().addingTimeInterval(20 * 60)
+            race.fp1Time = protectedFP1
+            race.raceTime = protectedFP1.addingTimeInterval(2 * 3600)
+            try await race.save(on: app.db)
+
+            let banResponse = try await banPick(
+                app: app,
+                token: seeded.users.token(for: thirdUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: secondUserID,
+                driverID: secondDriver,
+                expectedStatus: .ok
+            )
+
+            let dto = try XCTUnwrap(banResponse)
+            XCTAssertEqual(dto.currentPickIndex, 1)
+            XCTAssertEqual(dto.nextUserID, secondUserID)
+
+            let protectedRepick = try await fetchProtectedRepickState(app: app, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertEqual(protectedRepick.userID, secondUserID)
+            XCTAssertEqual(protectedRepick.pickIndex, 1)
+            XCTAssertNotNil(protectedRepick.deadline)
+            if let deadline = protectedRepick.deadline {
+                assertDateInRange(
+                    deadline,
+                    min: protectedFP1.addingTimeInterval(-5),
+                    max: protectedFP1.addingTimeInterval(5)
+                )
+            }
+
+            let banError = try await banPickError(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: firstUserID,
+                driverID: firstDriver,
+                expectedStatus: .forbidden
+            )
+            XCTAssertTrue(banError.reason.lowercased().contains("protected repick"))
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: replacementDriver,
+                expectedStatus: .ok
+            )
+
+            let clearedRepick = try await fetchProtectedRepickState(app: app, leagueID: seeded.leagueID, raceID: seeded.raceID)
+            XCTAssertNil(clearedRepick.userID)
+            XCTAssertNil(clearedRepick.pickIndex)
+            XCTAssertNil(clearedRepick.deadline)
+        }
+    }
+
+    func testBanPickFailsWhenNoFairProtectedRepickWindowRemains() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraft3Players(app: app)
+
+            let anyToken = seeded.users.map.values.first!.token
+            let order = try await getPickOrder(app: app, token: anyToken, leagueID: seeded.leagueID, raceID: seeded.raceID)
+
+            let firstUserID = order[0]
+            let secondUserID = order[1]
+            let thirdUserID = order[2]
+
+            let firstDriver = seeded.driverIDs[0]
+            let secondDriver = seeded.driverIDs[1]
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: firstDriver,
+                expectedStatus: .ok
+            )
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                driverID: secondDriver,
+                expectedStatus: .ok
+            )
+
+            guard let race = try await Race.find(seeded.raceID, on: app.db) else {
+                XCTFail("Race not found")
+                return
+            }
+            let imminentFP1 = Date().addingTimeInterval(5 * 60)
+            race.fp1Time = imminentFP1
+            race.raceTime = imminentFP1.addingTimeInterval(2 * 3600)
+            try await race.save(on: app.db)
+
+            let error = try await banPickError(
+                app: app,
+                token: seeded.users.token(for: thirdUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceID,
+                targetUserID: secondUserID,
+                driverID: secondDriver,
+                expectedStatus: .badRequest
+            )
+            XCTAssertTrue(error.reason.lowercased().contains("fair repick window"))
         }
     }
 

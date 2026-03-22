@@ -148,6 +148,10 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 ### Effects
 - Marks pick as banned (`is_banned = true`) and stores `banned_by`.
 - Moves `currentPickIndex` back to previous pick so user can re-pick.
+- If that reopened pick would otherwise have too little time left:
+  - a deadline-1 pick is protected and extended to deadline 2
+  - the ban is rejected if even deadline 2 would still be too late
+- While a protected re-pick is active, bans are disabled for that active slot.
 - Notifies next player after state change.
 - Draft detail (`GET /api/leagues/:leagueID/draft/:raceID`) exposes:
   - `bannedByUserIDsByPickIndex` (who executed each visible ban slot)

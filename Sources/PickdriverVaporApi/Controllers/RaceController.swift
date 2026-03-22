@@ -106,10 +106,9 @@ struct RaceController: RouteCollection {
         guard let race = try await Race.query(on: req.db)
             .filter(\.$seasonID == activeSeasonID)
             .filter(\.$completed == false)
-            .filter(\.$raceTime > Date())
-            .sort(\.$raceTime)
+            .sort(\.$round)
             .first() else {
-            throw Abort(.notFound, reason: "No upcoming race found.")
+            throw Abort(.notFound, reason: "No current race found.")
         }
         return RacePublic(race: race, media: MediaAssetService.raceMedia(for: race, req: req))
     }
