@@ -199,7 +199,7 @@ Client integration notes (iOS/Web):
 - GET /api/races/upcoming
   - Res: Race[] (active season only; includes `media` URLs)
 - GET /api/races/current
-  - Res: Race (active season only; includes `media` URLs)
+  - Res: Race (active season only; first race with `completed = false`, including races already started but not yet published/completed; includes `media` URLs)
 - GET /api/races/:raceID
   - Res: Race (includes `media` URLs)
 
@@ -256,6 +256,7 @@ Client integration notes (iOS/Web):
 - POST /api/leagues/:leagueID/draft/:raceID/ban
   - Req: { "targetUserID": Int, "driverID": Int }
   - Res: DraftResponse
+  - Note: if the banned player would not have a fair repick window, the API either protects the reopened slot until deadline 2 or rejects the ban if that still would not be enough
 
 ### Teams (auth)
 - POST /api/teams

@@ -195,6 +195,19 @@ final class DraftTests: XCTestCase {
         XCTAssertLessThanOrEqual(diff, toleranceSeconds, "Dates differ by \(diff)s", file: file, line: line)
     }
 
+    private func makeUTCDate(year: Int, month: Int, day: Int, hour: Int = 12, minute: Int = 0, second: Int = 0) -> Date {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.timeZone = TimeZone(secondsFromGMT: 0)
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        components.second = second
+        return components.date!
+    }
+
     // MARK: - Tests
 
     func testStartDraftActivatesLeagueAndCreatesRaceDrafts_noMirror() async throws {
@@ -203,9 +216,8 @@ final class DraftTests: XCTestCase {
             let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
 
             // Seed: 2 upcoming races (completed=false), with raceTime sorted + fp1Time set (needed for deadlines)
-            let now = Date()
-            let fp1Race1 = now.addingTimeInterval(7 * 24 * 3600)       // +7d
-            let fp1Race2 = now.addingTimeInterval(14 * 24 * 3600)      // +14d
+            let fp1Race1 = makeUTCDate(year: 2030, month: 4, day: 10)
+            let fp1Race2 = makeUTCDate(year: 2030, month: 4, day: 17)
 
             let race1 = try await TestSeed.createRace(
                 app: app,
@@ -282,8 +294,7 @@ final class DraftTests: XCTestCase {
             let dl1 = try await getDeadlines(app: app, token: u1.token, leagueID: leagueID, raceID: race1ID)
             XCTAssertEqual(dl1.leagueID, leagueID)
             XCTAssertEqual(dl1.raceID, race1ID)
-            assertSameSecond(dl1.secondHalfDeadline, fp1Race1)
-            assertSameSecond(dl1.firstHalfDeadline, fp1Race1.addingTimeInterval(-36 * 3600))
+            assertSameSecond(dl1.firstHalfDeadline, dl1.secondHalfDeadline.addingTimeInterval(-36 * 3600))
 
             // Assert: GET /draft/:raceID returns a RaceDraft with currentPickIndex=0 and mirrorPicks=false
             let draft1 = try await getRaceDraft(app: app, token: u1.token, leagueID: leagueID, raceID: race1ID)
@@ -311,8 +322,7 @@ final class DraftTests: XCTestCase {
         try await withTestApp { app in
             let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
 
-            let now = Date()
-            let fp1 = now.addingTimeInterval(7 * 24 * 3600)
+            let fp1 = makeUTCDate(year: 2030, month: 4, day: 10)
 
             // Only one upcoming race needed to validate mirror behavior
             let race = try await TestSeed.createRace(

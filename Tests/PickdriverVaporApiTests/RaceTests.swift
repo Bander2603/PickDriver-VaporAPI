@@ -106,14 +106,14 @@ final class RaceTests: XCTestCase {
         }
     }
 
-    func testGetCurrentReturnsClosestUpcomingNotCompletedRace() async throws {
+    func testGetCurrentReturnsFirstIncompleteRaceByRound() async throws {
         try await withTestApp { app in
             let season = try await TestSeed.createSeason(app: app)
 
             let near = Date().addingTimeInterval(3600)
             let far = Date().addingTimeInterval(7200)
 
-            _ = try await TestSeed.createRace(
+            let expected = try await TestSeed.createRace(
                 app: app,
                 seasonID: season.id!,
                 round: 1,
@@ -121,7 +121,7 @@ final class RaceTests: XCTestCase {
                 completed: false,
                 raceTime: far
             )
-            let expected = try await TestSeed.createRace(
+            _ = try await TestSeed.createRace(
                 app: app,
                 seasonID: season.id!,
                 round: 2,
@@ -134,16 +134,55 @@ final class RaceTests: XCTestCase {
                 XCTAssertEqual(res.status, .ok)
                 let race = try res.content.decode(Race.self)
                 XCTAssertEqual(race.id, expected.id)
-                XCTAssertEqual(race.name, "Near")
+                XCTAssertEqual(race.name, "Far")
             })
         }
     }
 
-    func testGetCurrentReturns404WhenNoUpcomingRace() async throws {
+    func testGetCurrentReturnsInProgressRaceUntilCompleted() async throws {
         try await withTestApp { app in
             let season = try await TestSeed.createSeason(app: app)
 
-            // Only past or completed
+            let inProgress = try await TestSeed.createRace(
+                app: app,
+                seasonID: season.id!,
+                round: 1,
+                name: "In Progress",
+                completed: false,
+                raceTime: Date().addingTimeInterval(-1800)
+            )
+            let next = try await TestSeed.createRace(
+                app: app,
+                seasonID: season.id!,
+                round: 2,
+                name: "Next Weekend",
+                completed: false,
+                raceTime: Date().addingTimeInterval(7 * 24 * 3600)
+            )
+
+            try await app.test(.GET, "/api/races/current", afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+                let race = try res.content.decode(Race.self)
+                XCTAssertEqual(race.id, inProgress.id)
+                XCTAssertEqual(race.name, "In Progress")
+            })
+
+            inProgress.completed = true
+            try await inProgress.save(on: app.db)
+
+            try await app.test(.GET, "/api/races/current", afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .ok)
+                let race = try res.content.decode(Race.self)
+                XCTAssertEqual(race.id, next.id)
+                XCTAssertEqual(race.name, "Next Weekend")
+            })
+        }
+    }
+
+    func testGetCurrentReturns404WhenNoIncompleteRaceRemains() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app)
+
             _ = try await TestSeed.createRace(
                 app: app,
                 seasonID: season.id!,
@@ -156,7 +195,7 @@ final class RaceTests: XCTestCase {
             try await app.test(.GET, "/api/races/current", afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .notFound)
                 let err = try res.content.decode(APIErrorResponse.self)
-                XCTAssertTrue(err.reason.lowercased().contains("no upcoming"))
+                XCTAssertTrue(err.reason.lowercased().contains("no current"))
             })
         }
     }

@@ -268,6 +268,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreatePlayerBans())
     app.migrations.add(AddAutoPickToPlayerPicks())
     app.migrations.add(CreatePlayerAutopicks())
+    app.migrations.add(AddProtectedRepickStateToRaceDrafts())
 
     // Results + maintenance
     app.migrations.add(CreateRaceResults())
