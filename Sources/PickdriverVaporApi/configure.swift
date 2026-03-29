@@ -222,7 +222,7 @@ public func configure(_ app: Application) async throws {
         ?? (app.environment == .production ? "require" : "disable"))
         .lowercased()
     let tls = try makePostgresTLS(mode: tlsMode)
-    let postgresConfig = SQLPostgresConfiguration(
+    var postgresConfig = SQLPostgresConfiguration(
         hostname: hostname,
         port: port,
         username: username,
@@ -230,9 +230,11 @@ public func configure(_ app: Application) async throws {
         database: dbName,
         tls: tls
     )
+    postgresConfig.coreConfiguration.options.additionalStartupParameters.append(("TimeZone", "Etc/UTC"))
 
     app.databases.use(.postgres(configuration: postgresConfig), as: .psql)
-    if let drillConfig = try makeDrillPostgresConfiguration(app: app, fallbackTLSMode: tlsMode) {
+    if var drillConfig = try makeDrillPostgresConfiguration(app: app, fallbackTLSMode: tlsMode) {
+        drillConfig.coreConfiguration.options.additionalStartupParameters.append(("TimeZone", "Etc/UTC"))
         app.databases.use(.postgres(configuration: drillConfig), as: .drill, isDefault: false)
     }
 
@@ -254,6 +256,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreateF1Teams())
     app.migrations.add(CreateDrivers())
     app.migrations.add(CreateRaces())
+    app.migrations.add(AddStatusToRaces())
 
     // League domain
     app.migrations.add(CreateLeagues())

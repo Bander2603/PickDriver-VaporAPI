@@ -167,6 +167,7 @@ enum TestSeed {
         round: Int,
         name: String,
         completed: Bool,
+        status: Race.Status? = nil,
         sprint: Bool = false,
         fp1Time: Date? = nil,
         raceTime: Date? = nil
@@ -180,7 +181,9 @@ enum TestSeed {
         r.country = "Spain"
         r.countryCode = "ES"
         r.sprint = sprint
-        r.completed = completed
+        r.status = Race.Status.scheduled.rawValue
+        r.completed = false
+        r.setStatus(status ?? (completed ? .completed : .scheduled))
         r.fp1Time = fp1Time
         r.raceTime = raceTime
         try await r.save(on: app.db)

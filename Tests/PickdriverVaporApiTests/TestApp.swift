@@ -7,9 +7,18 @@
 
 import XCTVapor
 @testable import PickdriverVaporApi
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 
 enum TestApp {
     static func make() async throws -> Application {
+        // Force UTC during tests because the schema still uses `timestamp without time zone`.
+        setenv("TZ", "UTC", 1)
+        tzset()
+
         let env = Environment.testing
         let app = try await Application.make(env)
 
@@ -33,4 +42,3 @@ enum TestApp {
         try? await app.asyncShutdown()
     }
 }
-

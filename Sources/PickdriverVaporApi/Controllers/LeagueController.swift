@@ -42,6 +42,7 @@ struct LeagueController: RouteCollection {
         let upcomingRaces = try await Race.query(on: database)
             .filter(\.$seasonID == seasonID)
             .filter(\.$completed == false)
+            .filter(\.$status != Race.Status.cancelled.rawValue)
             .sort(\.$raceTime)
             .sort(\.$round)
             .all()
@@ -403,6 +404,7 @@ struct LeagueController: RouteCollection {
             let allRaces = try await Race.query(on: tx)
                 .filter(\.$seasonID == league.seasonID)
                 .filter(\.$round >= race.round)
+                .filter(\.$status != Race.Status.cancelled.rawValue)
                 .sort(\.$round)
                 .all()
 
@@ -460,6 +462,15 @@ struct LeagueController: RouteCollection {
 
         _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
 
+        guard let race = try await Race.find(raceID, on: req.db) else {
+            throw Abort(.notFound, reason: "Race not found.")
+        }
+
+        if race.isCancelled {
+            _ = try await RaceCancellationService.invalidateCancelledDraftIfNeeded(raceID: raceID, on: req.db)
+            throw Abort(.notFound, reason: "Draft not found for that league and race.")
+        }
+
         guard let draft = try await RaceDraft.query(on: req.db)
             .filter(\.$league.$id == leagueID)
             .filter(\.$raceID == raceID)
@@ -484,6 +495,11 @@ struct LeagueController: RouteCollection {
         guard let race = try await Race.find(raceID, on: req.db),
               let fp1 = race.fp1Time else {
             throw Abort(.notFound, reason: "Race not found or FP1 time missing.")
+        }
+
+        if race.isCancelled {
+            _ = try await RaceCancellationService.invalidateCancelledDraftIfNeeded(raceID: raceID, on: req.db)
+            throw Abort(.notFound, reason: "Draft not found for that race.")
         }
 
         guard let draft = try await RaceDraft.query(on: req.db)
@@ -608,6 +624,15 @@ struct LeagueController: RouteCollection {
         }
 
         let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+
+        guard let race = try await Race.find(raceID, on: req.db) else {
+            throw Abort(.notFound, reason: "Race not found.")
+        }
+
+        if race.isCancelled {
+            _ = try await RaceCancellationService.invalidateCancelledDraftIfNeeded(raceID: raceID, on: req.db)
+            throw Abort(.notFound, reason: "Draft not found.")
+        }
 
         guard let draft = try await RaceDraft.query(on: req.db)
             .filter(\.$league.$id == leagueID)

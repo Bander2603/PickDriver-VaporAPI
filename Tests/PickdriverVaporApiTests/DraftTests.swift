@@ -318,6 +318,71 @@ final class DraftTests: XCTestCase {
         }
     }
 
+    func testStartDraftSkipsAlreadyCancelledRaces() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+
+            let fp1Race1 = makeUTCDate(year: 2030, month: 4, day: 10)
+            let fp1Race2 = makeUTCDate(year: 2030, month: 4, day: 17)
+
+            let cancelledRace = try await TestSeed.createRace(
+                app: app,
+                seasonID: try season.requireID(),
+                round: 1,
+                name: "Cancelled Race",
+                completed: false,
+                status: .cancelled,
+                fp1Time: fp1Race1,
+                raceTime: fp1Race1.addingTimeInterval(2 * 24 * 3600)
+            )
+            let activeRace = try await TestSeed.createRace(
+                app: app,
+                seasonID: try season.requireID(),
+                round: 2,
+                name: "Active Race",
+                completed: false,
+                fp1Time: fp1Race2,
+                raceTime: fp1Race2.addingTimeInterval(2 * 24 * 3600)
+            )
+
+            let u1 = try await TestAuth.register(app: app)
+            let u2 = try await TestAuth.register(app: app)
+
+            let league = try await createLeague(
+                app: app,
+                token: u1.token,
+                name: "Skip Cancelled League",
+                maxPlayers: 2,
+                teamsEnabled: false,
+                bansEnabled: false,
+                mirrorEnabled: false
+            )
+
+            let leagueID = try XCTUnwrap(league.id)
+            try await joinLeague(app: app, token: u2.token, code: league.code)
+            try await startDraft(app: app, token: u1.token, leagueID: leagueID)
+
+            let storedLeague = try await fetchLeagueFromDB(app: app, leagueID: leagueID)
+            let raceDraftCount = try await countRaceDraftsInDB(app: app, leagueID: leagueID)
+            XCTAssertEqual(storedLeague.initialRaceRound, 2)
+            XCTAssertEqual(raceDraftCount, 1)
+
+            try await app.test(.GET, "/api/leagues/\(leagueID)/draft/\(try cancelledRace.requireID())/pick-order", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: u1.token)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .notFound)
+            })
+
+            let order = try await getPickOrder(
+                app: app,
+                token: u1.token,
+                leagueID: leagueID,
+                raceID: try activeRace.requireID()
+            )
+            XCTAssertEqual(order.count, 2)
+        }
+    }
+
     func testStartDraftCreatesMirrorPickOrders_whenMirrorEnabled() async throws {
         try await withTestApp { app in
             let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
