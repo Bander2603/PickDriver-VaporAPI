@@ -11,6 +11,12 @@ import Vapor
 
 final class Race: Model, Content, @unchecked Sendable {
     static let schema = "races"
+
+    enum Status: String, Codable, CaseIterable {
+        case scheduled
+        case completed
+        case cancelled
+    }
     
     struct CircuitData: Codable, Content {
         var laps: Int?
@@ -51,6 +57,9 @@ final class Race: Model, Content, @unchecked Sendable {
     @Field(key: "completed")
     var completed: Bool
 
+    @Field(key: "status")
+    var status: String
+
     @OptionalField(key: "fp1_time")
     var fp1Time: Date?
 
@@ -73,5 +82,27 @@ final class Race: Model, Content, @unchecked Sendable {
     var sprintQualifyingTime: Date?
 
     init() {}
-}
 
+    var effectiveStatus: Status {
+        if status == Status.cancelled.rawValue {
+            return .cancelled
+        }
+        if completed || status == Status.completed.rawValue {
+            return .completed
+        }
+        return .scheduled
+    }
+
+    var isCancelled: Bool {
+        effectiveStatus == .cancelled
+    }
+
+    var isScheduled: Bool {
+        effectiveStatus == .scheduled
+    }
+
+    func setStatus(_ newStatus: Status) {
+        status = newStatus.rawValue
+        completed = (newStatus == .completed)
+    }
+}

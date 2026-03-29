@@ -32,6 +32,8 @@ struct DraftDeadlineProcessor {
         let now = Date()
 
         do {
+            _ = try await RaceCancellationService.invalidateCancelledDrafts(on: app.db)
+
             let rows = try await sql.raw("""
                 SELECT
                     rd.id AS draft_id,
@@ -48,6 +50,7 @@ struct DraftDeadlineProcessor {
                 FROM race_drafts rd
                 JOIN races r ON r.id = rd.race_id
                 WHERE r.completed = false
+                  AND r.status != \(bind: Race.Status.cancelled.rawValue)
                   AND r.fp1_time IS NOT NULL
                   AND rd.current_pick_index < COALESCE(array_length(rd.pick_order, 1), 0)
             """).all(decoding: DraftRow.self)

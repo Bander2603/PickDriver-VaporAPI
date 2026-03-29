@@ -313,6 +313,7 @@ final class PickDriverVaultTests: XCTestCase {
             race.country = "Spain"
             race.countryCode = "ES"
             race.sprint = false
+            race.status = Race.Status.scheduled.rawValue
             race.completed = false
             race.raceTime = Date().addingTimeInterval(3600)
             try await race.save(on: drillDB)

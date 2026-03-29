@@ -188,6 +188,61 @@ struct CreateRaces: AsyncMigration {
     }
 }
 
+struct AddStatusToRaces: AsyncMigration {
+    func prepare(on database: any Database) async throws {
+        let sql = try database.sql()
+
+        try await sql.exec(#"""
+        ALTER TABLE public.races
+        ADD COLUMN IF NOT EXISTS status character varying(20)
+        """#)
+
+        try await sql.exec(#"""
+        UPDATE public.races
+        SET status = CASE
+            WHEN completed = true THEN 'completed'
+            ELSE 'scheduled'
+        END
+        WHERE status IS NULL
+        """#)
+
+        try await sql.exec(#"""
+        ALTER TABLE public.races
+        ALTER COLUMN status SET DEFAULT 'scheduled'::character varying
+        """#)
+
+        try await sql.exec(#"""
+        ALTER TABLE public.races
+        ALTER COLUMN status SET NOT NULL
+        """#)
+
+        try await sql.exec(#"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'races_status_check'
+            ) THEN
+                ALTER TABLE public.races
+                ADD CONSTRAINT races_status_check
+                CHECK (status IN ('scheduled', 'completed', 'cancelled'));
+            END IF;
+        END
+        $$;
+        """#)
+
+        try await sql.exec("CREATE INDEX IF NOT EXISTS idx_races_season_status ON public.races USING btree (season_id, status)")
+    }
+
+    func revert(on database: any Database) async throws {
+        let sql = try database.sql()
+        try await sql.exec("DROP INDEX IF EXISTS public.idx_races_season_status")
+        try await sql.exec("ALTER TABLE public.races DROP CONSTRAINT IF EXISTS races_status_check")
+        try await sql.exec("ALTER TABLE public.races DROP COLUMN IF EXISTS status")
+    }
+}
+
 // MARK: - leagues
 
 struct CreateLeagues: AsyncMigration {

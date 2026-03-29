@@ -26,6 +26,7 @@ struct RaceController: RouteCollection {
         let country: String
         let countryCode: String
         let sprint: Bool
+        let status: String
         let completed: Bool
         let fp1Time: Date?
         let fp2Time: Date?
@@ -46,7 +47,8 @@ struct RaceController: RouteCollection {
             self.country = race.country
             self.countryCode = race.countryCode
             self.sprint = race.sprint
-            self.completed = race.completed
+            self.status = race.effectiveStatus.rawValue
+            self.completed = race.effectiveStatus == .completed
             self.fp1Time = race.fp1Time
             self.fp2Time = race.fp2Time
             self.fp3Time = race.fp3Time
@@ -66,11 +68,18 @@ struct RaceController: RouteCollection {
         races.get(":raceID", use: getByIDHandler)
 
         let protected = routes.grouped(UserAuthenticator())
+        protected.post("races", ":raceID", "cancel", use: cancelRace)
         protected.post("races", ":raceID", "results", "publish", use: publishResults)
     }
 
     struct PublishResultsResponse: Content {
         let createdNotifications: Int
+    }
+
+    struct RaceStatusResponse: Content {
+        let raceID: Int
+        let status: String
+        let completed: Bool
     }
 
     func getAllHandler(_ req: Request) async throws -> [RacePublic] {
@@ -91,6 +100,8 @@ struct RaceController: RouteCollection {
 
         let races = try await Race.query(on: req.db)
             .filter(\.$seasonID == activeSeasonID)
+            .filter(\.$completed == false)
+            .filter(\.$status != Race.Status.cancelled.rawValue)
             .filter(\.$raceTime > Date())
             .sort(\.$raceTime)
             .all()
@@ -106,6 +117,7 @@ struct RaceController: RouteCollection {
         guard let race = try await Race.query(on: req.db)
             .filter(\.$seasonID == activeSeasonID)
             .filter(\.$completed == false)
+            .filter(\.$status != Race.Status.cancelled.rawValue)
             .sort(\.$round)
             .first() else {
             throw Abort(.notFound, reason: "No current race found.")
@@ -131,6 +143,10 @@ struct RaceController: RouteCollection {
             throw Abort(.notFound, reason: "Race not found.")
         }
 
+        guard !race.isCancelled else {
+            throw Abort(.badRequest, reason: "Cancelled races cannot publish results.")
+        }
+
         guard let sql = req.db as? (any SQLDatabase) else {
             throw Abort(.internalServerError, reason: "SQLDatabase required.")
         }
@@ -146,8 +162,8 @@ struct RaceController: RouteCollection {
             throw Abort(.badRequest, reason: "No results found for this race.")
         }
 
-        if !race.completed {
-            race.completed = true
+        if race.effectiveStatus != .completed {
+            race.setStatus(.completed)
             try await race.save(on: req.db)
         }
 
@@ -157,5 +173,34 @@ struct RaceController: RouteCollection {
             raceID: raceID
         )
         return PublishResultsResponse(createdNotifications: created)
+    }
+
+    func cancelRace(_ req: Request) async throws -> RaceStatusResponse {
+        _ = try req.auth.require(User.self)
+
+        guard let raceID = req.parameters.get("raceID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid race ID.")
+        }
+
+        guard let race = try await Race.find(raceID, on: req.db) else {
+            throw Abort(.notFound, reason: "Race not found.")
+        }
+
+        guard race.effectiveStatus != .completed else {
+            throw Abort(.badRequest, reason: "Completed races cannot be cancelled.")
+        }
+
+        if race.effectiveStatus != .cancelled {
+            race.setStatus(.cancelled)
+            try await race.save(on: req.db)
+        }
+
+        _ = try await RaceCancellationService.invalidateCancelledDraftIfNeeded(raceID: raceID, on: req.db)
+
+        return RaceStatusResponse(
+            raceID: raceID,
+            status: race.effectiveStatus.rawValue,
+            completed: race.completed
+        )
     }
 }

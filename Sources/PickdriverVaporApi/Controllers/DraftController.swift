@@ -75,6 +75,11 @@ struct DraftController: RouteCollection {
             throw Abort(.notFound, reason: "Race not found")
         }
 
+        if race.isCancelled {
+            _ = try await RaceCancellationService.invalidateCancelledDraftIfNeeded(raceID: raceID, on: req.db)
+            throw Abort(.notFound, reason: "Draft not available for cancelled race")
+        }
+
         let now = Date()
         if race.completed || (race.raceTime != nil && race.raceTime! < now) {
             throw Abort(.badRequest, reason: "Race already started")
@@ -394,6 +399,11 @@ struct DraftController: RouteCollection {
 
         guard let race = try await Race.find(raceID, on: req.db) else {
             throw Abort(.notFound, reason: "Race not found")
+        }
+
+        if race.isCancelled {
+            _ = try await RaceCancellationService.invalidateCancelledDraftIfNeeded(raceID: raceID, on: req.db)
+            throw Abort(.notFound, reason: "Draft not available for cancelled race")
         }
 
         let now = Date()

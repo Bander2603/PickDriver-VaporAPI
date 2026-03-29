@@ -284,6 +284,15 @@ final class DraftPickTests: XCTestCase {
         return (draftID: r.id, currentPickIndex: r.current_pick_index, pickOrder: r.pick_order)
     }
 
+    private func rotatePickOrder(_ values: [Int], by offset: Int) -> [Int] {
+        guard !values.isEmpty else {
+            return []
+        }
+
+        let normalizedOffset = offset % values.count
+        return Array(values.dropFirst(normalizedOffset) + values.prefix(normalizedOffset))
+    }
+
     private func fetchProtectedRepickState(
         app: Application,
         leagueID: Int,
@@ -444,6 +453,197 @@ final class DraftPickTests: XCTestCase {
 
         let users = UsersByID(map: [id1: u1, id2: u2, id3: u3])
         return (leagueID: leagueID, raceID: raceID, fp1: fp1, users: users, driverIDs: driverIDs)
+    }
+
+    private func seedSimpleDraftTwoRaces3Players(
+        app: Application
+    ) async throws -> (
+        leagueID: Int,
+        race1ID: Int,
+        race2ID: Int,
+        users: UsersByID,
+        driverIDs: [Int]
+    ) {
+        let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+        let seasonID = try season.requireID()
+
+        let now = Date()
+        let fp1Race1 = now.addingTimeInterval(7 * 24 * 3600)
+        let fp1Race2 = now.addingTimeInterval(14 * 24 * 3600)
+
+        let race1 = try await TestSeed.createRace(
+            app: app,
+            seasonID: seasonID,
+            round: 1,
+            name: "Race Cancelled Later",
+            completed: false,
+            fp1Time: fp1Race1,
+            raceTime: fp1Race1.addingTimeInterval(2 * 24 * 3600)
+        )
+        let race2 = try await TestSeed.createRace(
+            app: app,
+            seasonID: seasonID,
+            round: 2,
+            name: "Race Remains Active",
+            completed: false,
+            fp1Time: fp1Race2,
+            raceTime: fp1Race2.addingTimeInterval(2 * 24 * 3600)
+        )
+
+        let f1Team = try await TestSeed.createF1Team(app: app, seasonID: seasonID, name: "Seed Team", color: "#000000")
+        let d1 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "A", lastName: "One", driverNumber: 11, driverCode: "A11")
+        let d2 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "B", lastName: "Two", driverNumber: 22, driverCode: "B22")
+        let d3 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "C", lastName: "Three", driverNumber: 33, driverCode: "C33")
+        let d4 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "D", lastName: "Four", driverNumber: 44, driverCode: "D44")
+        let d5 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "E", lastName: "Five", driverNumber: 55, driverCode: "E55")
+        let d6 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "F", lastName: "Six", driverNumber: 66, driverCode: "F66")
+        let driverIDs = [
+            try d1.requireID(),
+            try d2.requireID(),
+            try d3.requireID(),
+            try d4.requireID(),
+            try d5.requireID(),
+            try d6.requireID()
+        ]
+
+        let u1 = try await TestAuth.register(app: app)
+        let u2 = try await TestAuth.register(app: app)
+        let u3 = try await TestAuth.register(app: app)
+
+        let league = try await createLeague(
+            app: app,
+            token: u1.token,
+            name: "Draft Cancel League",
+            maxPlayers: 3,
+            teamsEnabled: false,
+            bansEnabled: true,
+            mirrorEnabled: false
+        )
+        let leagueID = try XCTUnwrap(league.id)
+
+        try await joinLeague(app: app, token: u2.token, code: league.code)
+        try await joinLeague(app: app, token: u3.token, code: league.code)
+        try await startDraft(app: app, token: u1.token, leagueID: leagueID)
+
+        let id1 = try XCTUnwrap(u1.publicUser.id)
+        let id2 = try XCTUnwrap(u2.publicUser.id)
+        let id3 = try XCTUnwrap(u3.publicUser.id)
+
+        let users = UsersByID(map: [id1: u1, id2: u2, id3: u3])
+        return (
+            leagueID: leagueID,
+            race1ID: try race1.requireID(),
+            race2ID: try race2.requireID(),
+            users: users,
+            driverIDs: driverIDs
+        )
+    }
+
+    private func seedSimpleDraftFourRaces3Players(
+        app: Application
+    ) async throws -> (
+        leagueID: Int,
+        raceIDs: [Int],
+        users: UsersByID,
+        driverIDs: [Int]
+    ) {
+        let season = try await TestSeed.createSeason(app: app, year: 2026, active: true)
+        let seasonID = try season.requireID()
+
+        let now = Date()
+        let fp1Race1 = now.addingTimeInterval(7 * 24 * 3600)
+        let fp1Race2 = now.addingTimeInterval(14 * 24 * 3600)
+        let fp1Race3 = now.addingTimeInterval(21 * 24 * 3600)
+        let fp1Race4 = now.addingTimeInterval(28 * 24 * 3600)
+
+        let race1 = try await TestSeed.createRace(
+            app: app,
+            seasonID: seasonID,
+            round: 1,
+            name: "Race One",
+            completed: false,
+            fp1Time: fp1Race1,
+            raceTime: fp1Race1.addingTimeInterval(2 * 24 * 3600)
+        )
+        let race2 = try await TestSeed.createRace(
+            app: app,
+            seasonID: seasonID,
+            round: 2,
+            name: "Race Two",
+            completed: false,
+            fp1Time: fp1Race2,
+            raceTime: fp1Race2.addingTimeInterval(2 * 24 * 3600)
+        )
+        let race3 = try await TestSeed.createRace(
+            app: app,
+            seasonID: seasonID,
+            round: 3,
+            name: "Race Three",
+            completed: false,
+            fp1Time: fp1Race3,
+            raceTime: fp1Race3.addingTimeInterval(2 * 24 * 3600)
+        )
+        let race4 = try await TestSeed.createRace(
+            app: app,
+            seasonID: seasonID,
+            round: 4,
+            name: "Race Four",
+            completed: false,
+            fp1Time: fp1Race4,
+            raceTime: fp1Race4.addingTimeInterval(2 * 24 * 3600)
+        )
+
+        let f1Team = try await TestSeed.createF1Team(app: app, seasonID: seasonID, name: "Seed Team", color: "#000000")
+        let d1 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "A", lastName: "One", driverNumber: 11, driverCode: "A11")
+        let d2 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "B", lastName: "Two", driverNumber: 22, driverCode: "B22")
+        let d3 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "C", lastName: "Three", driverNumber: 33, driverCode: "C33")
+        let d4 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "D", lastName: "Four", driverNumber: 44, driverCode: "D44")
+        let d5 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "E", lastName: "Five", driverNumber: 55, driverCode: "E55")
+        let d6 = try await TestSeed.createDriver(app: app, seasonID: seasonID, f1TeamID: f1Team.id, firstName: "F", lastName: "Six", driverNumber: 66, driverCode: "F66")
+        let driverIDs = [
+            try d1.requireID(),
+            try d2.requireID(),
+            try d3.requireID(),
+            try d4.requireID(),
+            try d5.requireID(),
+            try d6.requireID()
+        ]
+
+        let u1 = try await TestAuth.register(app: app)
+        let u2 = try await TestAuth.register(app: app)
+        let u3 = try await TestAuth.register(app: app)
+
+        let league = try await createLeague(
+            app: app,
+            token: u1.token,
+            name: "Draft Cancel Multi League",
+            maxPlayers: 3,
+            teamsEnabled: false,
+            bansEnabled: true,
+            mirrorEnabled: false
+        )
+        let leagueID = try XCTUnwrap(league.id)
+
+        try await joinLeague(app: app, token: u2.token, code: league.code)
+        try await joinLeague(app: app, token: u3.token, code: league.code)
+        try await startDraft(app: app, token: u1.token, leagueID: leagueID)
+
+        let id1 = try XCTUnwrap(u1.publicUser.id)
+        let id2 = try XCTUnwrap(u2.publicUser.id)
+        let id3 = try XCTUnwrap(u3.publicUser.id)
+
+        let users = UsersByID(map: [id1: u1, id2: u2, id3: u3])
+        return (
+            leagueID: leagueID,
+            raceIDs: [
+                try race1.requireID(),
+                try race2.requireID(),
+                try race3.requireID(),
+                try race4.requireID()
+            ],
+            users: users,
+            driverIDs: driverIDs
+        )
     }
 
     private func seedTeamDraft4Players(
@@ -746,6 +946,145 @@ final class DraftPickTests: XCTestCase {
                 driverID: secondPick,
                 expectedStatus: .badRequest
             )
+        }
+    }
+
+    func testCancelledRaceInvalidatesDraftDataAndReusesItsOrderForNextPlayableRace() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraftTwoRaces3Players(app: app)
+            let anyToken = seeded.users.map.values.first!.token
+
+            let race1Order = try await getPickOrder(
+                app: app,
+                token: anyToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.race1ID
+            )
+            let race2OrderBefore = try await getPickOrder(
+                app: app,
+                token: anyToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.race2ID
+            )
+
+            let firstUserID = race1Order[0]
+            let secondUserID = race1Order[1]
+
+            _ = try await makePick(
+                app: app,
+                token: seeded.users.token(for: firstUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.race1ID,
+                driverID: seeded.driverIDs[0],
+                expectedStatus: .ok
+            )
+
+            _ = try await banPick(
+                app: app,
+                token: seeded.users.token(for: secondUserID),
+                leagueID: seeded.leagueID,
+                raceID: seeded.race1ID,
+                targetUserID: firstUserID,
+                driverID: seeded.driverIDs[0],
+                expectedStatus: .ok
+            )
+
+            let sql = try sql(app)
+            try await sql.raw("""
+                UPDATE races
+                SET status = \(bind: Race.Status.cancelled.rawValue),
+                    completed = false
+                WHERE id = \(bind: seeded.race1ID)
+            """).run()
+
+            try await app.test(.GET, "/api/leagues/\(seeded.leagueID)/draft/\(seeded.race1ID)/pick-order", beforeRequest: { req async throws in
+                req.headers.bearerAuthorization = .init(token: anyToken)
+            }, afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .notFound)
+            })
+
+            struct DraftStateRow: Decodable {
+                let status: String
+                let current_pick_index: Int
+            }
+            struct CountRow: Decodable { let count: Int }
+
+            let race1Draft = try await fetchRaceDraftRow(app: app, leagueID: seeded.leagueID, raceID: seeded.race1ID)
+            let draftState = try await sql.raw("""
+                SELECT status, current_pick_index
+                FROM race_drafts
+                WHERE id = \(bind: race1Draft.draftID)
+            """).first(decoding: DraftStateRow.self)
+            let pickCount = try await sql.raw("""
+                SELECT COUNT(*)::int AS count
+                FROM player_picks
+                WHERE draft_id = \(bind: race1Draft.draftID)
+            """).first(decoding: CountRow.self)
+            let banCount = try await sql.raw("""
+                SELECT COUNT(*)::int AS count
+                FROM player_bans
+                WHERE draft_id = \(bind: race1Draft.draftID)
+            """).first(decoding: CountRow.self)
+
+            XCTAssertEqual(draftState?.status, Race.Status.cancelled.rawValue)
+            XCTAssertEqual(draftState?.current_pick_index, race1Order.count)
+            XCTAssertEqual(pickCount?.count, 0)
+            XCTAssertEqual(banCount?.count, 0)
+
+            let race2OrderAfter = try await getPickOrder(
+                app: app,
+                token: anyToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.race2ID
+            )
+            XCTAssertEqual(race2OrderBefore, rotatePickOrder(race1Order, by: 1))
+            XCTAssertEqual(race2OrderAfter, race1Order)
+        }
+    }
+
+    func testConsecutiveCancelledRacesKeepFirstCancelledOrderForNextPlayableRace() async throws {
+        try await withTestApp { app in
+            let seeded = try await seedSimpleDraftFourRaces3Players(app: app)
+            let anyToken = seeded.users.map.values.first!.token
+
+            let race1Order = try await getPickOrder(
+                app: app,
+                token: anyToken,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceIDs[0]
+            )
+            let expectedCancelledOrder = rotatePickOrder(race1Order, by: 1)
+
+            let sql = try sql(app)
+            try await sql.raw("""
+                UPDATE races
+                SET status = \(bind: Race.Status.cancelled.rawValue),
+                    completed = false
+                WHERE id IN (\(bind: seeded.raceIDs[1]), \(bind: seeded.raceIDs[2]))
+            """).run()
+
+            _ = try await RaceCancellationService.invalidateCancelledDrafts(on: app.db, raceID: seeded.raceIDs[1])
+            _ = try await RaceCancellationService.invalidateCancelledDrafts(on: app.db, raceID: seeded.raceIDs[2])
+
+            let cancelledRace2Draft = try await fetchRaceDraftRow(
+                app: app,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceIDs[1]
+            )
+            let cancelledRace3Draft = try await fetchRaceDraftRow(
+                app: app,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceIDs[2]
+            )
+            let race4Draft = try await fetchRaceDraftRow(
+                app: app,
+                leagueID: seeded.leagueID,
+                raceID: seeded.raceIDs[3]
+            )
+
+            XCTAssertEqual(cancelledRace2Draft.pickOrder, expectedCancelledOrder)
+            XCTAssertEqual(cancelledRace3Draft.pickOrder, expectedCancelledOrder)
+            XCTAssertEqual(race4Draft.pickOrder, expectedCancelledOrder)
         }
     }
 
