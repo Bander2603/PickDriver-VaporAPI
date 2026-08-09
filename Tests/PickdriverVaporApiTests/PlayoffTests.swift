@@ -344,20 +344,28 @@ final class PlayoffTests: XCTestCase {
             let season = try await TestSeed.createSeason(app: app, year: 2033, active: true)
             let seasonID = try season.requireID()
             let fp1 = makeUTCDate(year: 2033, month: 7, day: 1)
-            let races = try await (1...5).asyncMap { round in
-                try await TestSeed.createRace(
+            var races: [Race] = []
+            for round in 1...5 {
+                let raceFP1 = fp1.addingTimeInterval(TimeInterval((round - 1) * 7 * 24 * 3600))
+                let race = try await TestSeed.createRace(
                     app: app,
                     seasonID: seasonID,
                     round: round,
                     name: "Calendar Race \(round)",
                     completed: false,
-                    fp1Time: fp1.addingTimeInterval(TimeInterval((round - 1) * 7 * 24 * 3600)),
-                    raceTime: fp1.addingTimeInterval(TimeInterval((round - 1) * 7 * 24 * 3600 + 2 * 24 * 3600))
+                    fp1Time: raceFP1,
+                    raceTime: raceFP1.addingTimeInterval(2 * 24 * 3600)
                 )
+                races.append(race)
             }
 
-            let users = try await (1...4).asyncMap { index in
-                try await TestAuth.register(app: app, username: "calendar_\(index)", email: "calendar_\(index)@test.com")
+            var users: [TestAuth.CreatedUser] = []
+            for index in 1...4 {
+                users.append(try await TestAuth.register(
+                    app: app,
+                    username: "calendar_\(index)",
+                    email: "calendar_\(index)@test.com"
+                ))
             }
             let league = try await createLeague(app: app, token: users[0].token, maxPlayers: 4, mirrorEnabled: false)
             let leagueID = try XCTUnwrap(league.id)
