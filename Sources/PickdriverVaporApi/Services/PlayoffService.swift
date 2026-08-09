@@ -360,6 +360,20 @@ enum PlayoffService {
         return fp1Time
     }
 
+    /// A finalized bracket is immutable. Cancellation cleanup uses this to
+    /// retain the historical playoff order of a cancelled race while it
+    /// recalculates only ordinary, unfrozen draft rotations.
+    static func isFinalizedPlayoffRace(
+        leagueID: Int,
+        raceID: Int,
+        on database: any Database
+    ) async throws -> Bool {
+        guard let playoff = try await playoffRow(leagueID: leagueID, on: database) else {
+            return false
+        }
+        return playoff.status == "finalized" && playoff.playoff_race_ids.contains(raceID)
+    }
+
     static func processExpiredSelections(app: Application) async {
         do {
             try await synchronizeActiveLeagues(on: app.db)

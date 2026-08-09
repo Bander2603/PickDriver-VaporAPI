@@ -396,6 +396,95 @@ final class PlayoffTests: XCTestCase {
         }
     }
 
+    func testAddedMidSeasonRaceRecalculatesFutureRotationsAndPlayoffBoundary() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2034, active: true)
+            let seasonID = try season.requireID()
+            let fp1 = makeUTCDate(year: 2034, month: 8, day: 1)
+
+            var initialRaces: [Race] = []
+            for round in [1, 3, 4, 5] {
+                let raceFP1 = fp1.addingTimeInterval(TimeInterval((round - 1) * 7 * 24 * 3600))
+                initialRaces.append(try await TestSeed.createRace(
+                    app: app,
+                    seasonID: seasonID,
+                    round: round,
+                    name: "Initial Race \(round)",
+                    completed: false,
+                    fp1Time: raceFP1,
+                    raceTime: raceFP1.addingTimeInterval(2 * 24 * 3600)
+                ))
+            }
+
+            var users: [TestAuth.CreatedUser] = []
+            for index in 1...3 {
+                users.append(try await TestAuth.register(
+                    app: app,
+                    username: "addition_\(index)",
+                    email: "addition_\(index)@test.com"
+                ))
+            }
+            let league = try await createLeague(app: app, token: users[0].token, maxPlayers: 3, mirrorEnabled: false)
+            let leagueID = try XCTUnwrap(league.id)
+            for user in users.dropFirst() {
+                try await joinLeague(app: app, token: user.token, code: league.code)
+            }
+            try await startDraft(app: app, token: users[0].token, leagueID: leagueID)
+
+            let firstRaceID = try initialRaces[0].requireID()
+            let roundThreeRaceID = try initialRaces[1].requireID()
+            let roundFourRaceID = try initialRaces[2].requireID()
+            let roundFiveRaceID = try initialRaces[3].requireID()
+            let firstOrder = try await pickOrder(
+                app: app,
+                token: users[0].token,
+                leagueID: leagueID,
+                raceID: firstRaceID
+            )
+
+            let addedFP1 = fp1.addingTimeInterval(7 * 24 * 3600)
+            let addedRace = try await TestSeed.createRace(
+                app: app,
+                seasonID: seasonID,
+                round: 2,
+                name: "Added Mid-Season Race",
+                completed: false,
+                fp1Time: addedFP1,
+                raceTime: addedFP1.addingTimeInterval(2 * 24 * 3600)
+            )
+            let addedRaceID = try addedRace.requireID()
+
+            let shiftedRegularOrder = try await pickOrder(
+                app: app,
+                token: users[0].token,
+                leagueID: leagueID,
+                raceID: roundThreeRaceID
+            )
+            let addedRaceOrder = try await pickOrder(
+                app: app,
+                token: users[0].token,
+                leagueID: leagueID,
+                raceID: addedRaceID
+            )
+            let shiftedPlayoffOrder = try await pickOrder(
+                app: app,
+                token: users[0].token,
+                leagueID: leagueID,
+                raceID: roundFourRaceID
+            )
+            let expectedAddedRaceOrder = Array(firstOrder.dropFirst(1) + firstOrder.prefix(1))
+            let expectedShiftedOrder = Array(firstOrder.dropFirst(2) + firstOrder.prefix(2))
+            XCTAssertEqual(addedRaceOrder, expectedAddedRaceOrder)
+            XCTAssertEqual(shiftedRegularOrder, expectedShiftedOrder)
+            XCTAssertEqual(shiftedPlayoffOrder, [])
+
+            let status = try await playoffStatus(app: app, token: users[0].token, leagueID: leagueID)
+            XCTAssertEqual(status.status, "regular_season")
+            XCTAssertEqual(status.regularRaceCount, 3)
+            XCTAssertEqual(status.playoffRaceIDs, [roundFourRaceID, roundFiveRaceID])
+        }
+    }
+
     func testScheduleSynchronizationNeverResetsAnInProgressRegularDraft() async throws {
         try await withTestApp { app in
             let season = try await TestSeed.createSeason(app: app, year: 2032, active: true)
