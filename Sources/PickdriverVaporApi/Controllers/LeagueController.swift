@@ -26,6 +26,8 @@ struct LeagueController: RouteCollection {
         protected.get(":leagueID", "teams", use: getLeagueTeams)
         protected.post(":leagueID", "assign-pick-order", use: assignPickOrder)
         protected.post(":leagueID", "start-draft", use: activateDraft)
+        protected.get(":leagueID", "playoffs", use: getPlayoffStatus)
+        protected.post(":leagueID", "playoffs", "pick-order", use: selectPlayoffPickPosition)
         protected.get(":leagueID", "draft", ":raceID", "pick-order", use: getPickOrderForRace)
         protected.get(":leagueID", "draft", ":raceID", use: getRaceDraft)
         protected.get(":leagueID", "draft", ":raceID", "deadlines", use: getDraftDeadlines)
@@ -411,16 +413,21 @@ struct LeagueController: RouteCollection {
             let baseOrder = pickOrderMembers.map { $0.$user.id }
             var pendingNotification: PendingDraftNotification?
 
+            let completedRotations = allRaces.count / baseOrder.count
+            let playoffRaceCount = completedRotations > 0 ? allRaces.count % baseOrder.count : 0
+            let regularRaceCount = allRaces.count - playoffRaceCount
+
             for (i, race) in allRaces.enumerated() {
                 let rotated = Array(baseOrder.dropFirst(i % baseOrder.count) + baseOrder.prefix(i % baseOrder.count))
                 let pickOrder = league.mirrorEnabled ? rotated + rotated.reversed() : rotated
+                let isRegularRace = i < regularRaceCount
 
                 let draft = RaceDraft(
                     leagueID: leagueID,
                     raceID: try race.requireID(),
-                    pickOrder: pickOrder,
+                    pickOrder: isRegularRace ? pickOrder : [],
                     mirrorPicks: league.mirrorEnabled,
-                    status: "pending"
+                    status: isRegularRace ? "pending" : "playoff_pending"
                 )
                 try await draft.save(on: tx)
 
@@ -451,6 +458,38 @@ struct LeagueController: RouteCollection {
 
         return .ok
     }
+
+    struct PlayoffPickPositionRequest: Content {
+        let pickPosition: Int
+    }
+
+    func getPlayoffStatus(_ req: Request) async throws -> PlayoffService.StatusResponse {
+        let _ = try req.auth.require(User.self)
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        return try await PlayoffService.status(leagueID: leagueID, on: req.db)
+    }
+
+    func selectPlayoffPickPosition(_ req: Request) async throws -> PlayoffService.StatusResponse {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        let data = try req.content.decode(PlayoffPickPositionRequest.self)
+        try await PlayoffService.selectPickPosition(
+            leagueID: leagueID,
+            userID: userID,
+            pickPosition: data.pickPosition,
+            on: req.db
+        )
+        return try await PlayoffService.status(leagueID: leagueID, on: req.db)
+    }
     
     func getPickOrderForRace(_ req: Request) async throws -> [Int] {
         let _ = try req.auth.require(User.self)
@@ -461,6 +500,7 @@ struct LeagueController: RouteCollection {
         }
 
         _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        try await PlayoffService.synchronizeLeague(leagueID: leagueID, on: req.db)
 
         guard let race = try await Race.find(raceID, on: req.db) else {
             throw Abort(.notFound, reason: "Race not found.")
@@ -491,6 +531,7 @@ struct LeagueController: RouteCollection {
         }
 
         _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        try await PlayoffService.synchronizeLeague(leagueID: leagueID, on: req.db)
 
         guard let race = try await Race.find(raceID, on: req.db),
               let fp1 = race.fp1Time else {
@@ -509,7 +550,12 @@ struct LeagueController: RouteCollection {
             throw Abort(.notFound, reason: "Draft not found for that race.")
         }
 
-        let firstHalfDeadline = fp1.addingTimeInterval(-36 * 3600)
+        let firstHalfDeadline = try await PlayoffService.firstHalfDraftDeadline(
+            leagueID: leagueID,
+            raceID: raceID,
+            fp1Time: fp1,
+            on: req.db
+        )
         let secondHalfDeadline = fp1
 
         return DraftDeadline(
@@ -624,6 +670,7 @@ struct LeagueController: RouteCollection {
         }
 
         let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        try await PlayoffService.synchronizeLeague(leagueID: leagueID, on: req.db)
 
         guard let race = try await Race.find(raceID, on: req.db) else {
             throw Abort(.notFound, reason: "Race not found.")

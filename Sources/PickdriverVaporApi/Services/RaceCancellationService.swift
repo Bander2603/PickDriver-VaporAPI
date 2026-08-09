@@ -18,13 +18,9 @@ enum RaceCancellationService {
 
     private struct LeagueDraftRow: Decodable {
         let draft_id: Int
-        let pick_order: [Int]
-        let current_pick_index: Int
+        let race_id: Int
         let mirror_picks: Bool
-        let draft_status: String
         let race_status: String
-        let has_picks: Bool
-        let has_bans: Bool
     }
 
     private static func sql(_ db: any Database) throws -> any SQLDatabase {
@@ -111,7 +107,7 @@ enum RaceCancellationService {
         }
 
         for leagueID in affectedLeagueIDs {
-            try await reconcileDraftOrdersForLeague(leagueID: leagueID, sql: sql)
+            try await reconcileDraftOrdersForLeague(leagueID: leagueID, on: db)
         }
 
         return cancelledDrafts.count
@@ -119,61 +115,74 @@ enum RaceCancellationService {
 
     private static func reconcileDraftOrdersForLeague(
         leagueID: Int,
-        sql: any SQLDatabase
+        on database: any Database
     ) async throws {
-        let baseOrder = try await sql.raw(SQLQueryString("""
+        try await PlayoffService.synchronizeLeague(leagueID: leagueID, on: database)
+        try await reconcileCancelledDraftHistory(leagueID: leagueID, on: database)
+    }
+
+    /// Cancelled races do not consume a rotation. Their stored order is kept
+    /// as historical context, using the same order as the next playable race
+    /// after any run of consecutive cancellations. This mirrors the original
+    /// cancellation contract without mutating live drafts or final playoffs.
+    private static func reconcileCancelledDraftHistory(
+        leagueID: Int,
+        on database: any Database
+    ) async throws {
+        let sql = try sql(database)
+        let baseOrder = try await sql.raw("""
             SELECT user_id
             FROM league_members
             WHERE league_id = \(bind: leagueID)
               AND pick_order IS NOT NULL
             ORDER BY pick_order ASC
-        """)).all(decoding: LeagueMemberOrderRow.self).map(\.user_id)
-
+        """).all(decoding: LeagueMemberOrderRow.self).map(\.user_id)
         guard !baseOrder.isEmpty else {
             return
         }
 
-        let draftRows = try await sql.raw(SQLQueryString("""
+        let draftRows = try await sql.raw("""
             SELECT
                 rd.id AS draft_id,
-                rd.pick_order AS pick_order,
-                rd.current_pick_index AS current_pick_index,
+                rd.race_id AS race_id,
                 rd.mirror_picks AS mirror_picks,
-                rd.status AS draft_status,
-                r.status AS race_status,
-                EXISTS (
-                    SELECT 1
-                    FROM player_picks pp
-                    WHERE pp.draft_id = rd.id
-                ) AS has_picks,
-                EXISTS (
-                    SELECT 1
-                    FROM player_bans pb
-                    WHERE pb.draft_id = rd.id
-                ) AS has_bans
+                r.status AS race_status
             FROM race_drafts rd
             JOIN races r ON r.id = rd.race_id
             WHERE rd.league_id = \(bind: leagueID)
             ORDER BY r.round ASC, rd.id ASC
-        """)).all(decoding: LeagueDraftRow.self)
+        """).all(decoding: LeagueDraftRow.self)
 
         var playableRaceCount = 0
-
         for draft in draftRows {
             let rotatedOrder = rotate(baseOrder, by: playableRaceCount)
-            let expectedOrder = draft.mirror_picks ? rotatedOrder + rotatedOrder.reversed() : rotatedOrder
+            let expectedOrder = draft.mirror_picks
+                ? rotatedOrder + rotatedOrder.reversed()
+                : rotatedOrder
 
-            if draft.pick_order != expectedOrder {
-                try await applyReconciledPickOrder(
-                    draft: draft,
-                    expectedOrder: expectedOrder,
-                    sql: sql
+            if draft.race_status == Race.Status.cancelled.rawValue {
+                let isFrozenPlayoff = try await PlayoffService.isFinalizedPlayoffRace(
+                    leagueID: leagueID,
+                    raceID: draft.race_id,
+                    on: database
                 )
+                if !isFrozenPlayoff {
+                    try await sql.raw("""
+                        UPDATE race_drafts
+                        SET pick_order = \(bind: expectedOrder),
+                            status = \(bind: Race.Status.cancelled.rawValue),
+                            current_pick_index = \(bind: expectedOrder.count),
+                            protected_repick_user_id = NULL,
+                            protected_repick_pick_index = NULL,
+                            protected_repick_deadline = NULL,
+                            updated_at = NOW()
+                        WHERE id = \(bind: draft.draft_id)
+                    """).run()
+                }
+                continue
             }
 
-            if draft.race_status != Race.Status.cancelled.rawValue {
-                playableRaceCount += 1
-            }
+            playableRaceCount += 1
         }
     }
 
@@ -181,57 +190,8 @@ enum RaceCancellationService {
         guard !values.isEmpty else {
             return []
         }
-
         let normalizedOffset = offset % values.count
         return Array(values.dropFirst(normalizedOffset) + values.prefix(normalizedOffset))
     }
 
-    private static func applyReconciledPickOrder(
-        draft: LeagueDraftRow,
-        expectedOrder: [Int],
-        sql: any SQLDatabase
-    ) async throws {
-        if draft.race_status == Race.Status.completed.rawValue {
-            return
-        }
-
-        if draft.race_status == Race.Status.cancelled.rawValue {
-            try await sql.raw(SQLQueryString("""
-                UPDATE race_drafts
-                SET pick_order = \(bind: expectedOrder),
-                    status = \(bind: Race.Status.cancelled.rawValue),
-                    current_pick_index = \(bind: expectedOrder.count),
-                    protected_repick_user_id = NULL,
-                    protected_repick_pick_index = NULL,
-                    protected_repick_deadline = NULL,
-                    updated_at = NOW()
-                WHERE id = \(bind: draft.draft_id)
-            """)).run()
-            return
-        }
-
-        if draft.has_picks || draft.has_bans || draft.current_pick_index != 0 || draft.draft_status != "pending" {
-            try await sql.raw(SQLQueryString("""
-                DELETE FROM player_picks
-                WHERE draft_id = \(bind: draft.draft_id)
-            """)).run()
-
-            try await sql.raw(SQLQueryString("""
-                DELETE FROM player_bans
-                WHERE draft_id = \(bind: draft.draft_id)
-            """)).run()
-        }
-
-        try await sql.raw(SQLQueryString("""
-            UPDATE race_drafts
-            SET pick_order = \(bind: expectedOrder),
-                status = \(bind: "pending"),
-                current_pick_index = 0,
-                protected_repick_user_id = NULL,
-                protected_repick_pick_index = NULL,
-                protected_repick_deadline = NULL,
-                updated_at = NOW()
-            WHERE id = \(bind: draft.draft_id)
-        """)).run()
-    }
 }

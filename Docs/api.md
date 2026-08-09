@@ -74,6 +74,9 @@ Leagues and teams:
 Draft:
 - start-draft creates drafts for upcoming races from initial_race_round.
 - pickOrder includes mirrored picks if mirror_picks_enabled = true.
+- Playoffs are determined dynamically from playable scheduled races and league size. After at least one complete regular rotation, the remainder races are playoffs. Their player-selected order is only available after all regular-season results are complete.
+- Playoff pick-position selection closes 24 hours before FP1 of the first playoff race; remaining positions are randomized within their seeded group.
+- The first playoff draft remains manually playable until FP1 because its player-selected order can remain open until FP1 - 24h. Later playoff drafts use the ordinary first-half and FP1 deadlines.
 - Deadlines: firstHalfDeadline = fp1 - 36h; secondHalfDeadline = fp1.
 - pick/ban is blocked once race has started (raceTime in the past).
 - Pick: only current turn user; with teams enabled, in the last hour before fp1 a teammate can pick for current turn.
@@ -237,6 +240,13 @@ Client integration notes (iOS/Web):
   - Res: 200 OK
 - POST /api/leagues/:leagueID/start-draft
   - Res: 200 OK
+- GET /api/leagues/:leagueID/playoffs
+  - Res: `PlayoffStatus`
+  - Notes: authenticated league members can inspect whether playoffs apply, the regular/playoff boundary, the frozen seed order once available, the selection deadline, current choices, and the finalized first draft order.
+- POST /api/leagues/:leagueID/playoffs/pick-order
+  - Req: `{ "pickPosition": Int }`
+  - Res: `PlayoffStatus`
+  - Notes: only the next player in frozen standings order may choose. `pickPosition` is one-based and must be inside that player's group: `1...topGroupSize` for the top group, or `topGroupSize+1...playerCount` for the lower group.
 - GET /api/leagues/:leagueID/draft/:raceID/pick-order
   - Res: [Int] (user IDs)
 - GET /api/leagues/:leagueID/draft/:raceID
@@ -340,6 +350,10 @@ DraftDeadline:
 
 DraftResponse:
 { "status": String, "currentPickIndex": Int, "nextUserID": Int?, "bannedDriverIDs": [Int], "pickedDriverIDs": [Int], "yourTurn": Bool, "yourDeadline": Date }
+
+PlayoffStatus:
+{ "enabled": Bool, "status": "not_available"|"not_applicable"|"regular_season"|"selecting"|"finalized", "regularRaceCount": Int, "playoffRaceIDs": [Int], "firstPlayoffRaceID": Int?, "selectionDeadline": Date?, "seedOrder": [Int], "topGroupSize": Int?, "selectedPickPositionByUserID": { "<userID>": Int }, "availablePickPositions": [Int], "nextSelectorUserID": Int?, "firstPickOrder": [Int] }
+  - `firstPickOrder` is empty until selection finalization. In mirror leagues it includes both group-local mirror halves.
 
 LeagueTeam:
 { "id": Int, "name": String, "league": { "id": Int }, "members": [TeamMember] }

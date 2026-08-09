@@ -91,6 +91,91 @@ WHERE schemaname='public' AND tablename='users' AND indexname='idx_users_deleted
 
 ---
 
+## Playoffs Migration
+
+The playoffs feature introduces migration `CreateLeaguePlayoffs`:
+
+- `league_playoffs`: one persisted playoff bracket per league, including the regular-race boundary, the complete locked set of playoff race IDs, first playoff race, selection deadline, frozen standings order, group size, and finalized first pick order.
+- `league_playoff_pick_selections`: one position-selection record per seeded player, with unique ranks and chosen positions.
+
+Deployment requirement:
+
+- Apply this migration before deploying the API version that exposes `/api/leagues/:leagueID/playoffs`.
+- Existing active leagues remain compatible: their schedule is reconciled on normal draft/deadline processing and when a playoff endpoint is read. No historical draft rows are rewritten after the playoff bracket has been finalized.
+- Before production rollout, run the preflight below. If it returns rows, the affected league has already started a draft that the new dynamic calendar would classify as a playoff race. Do not delete or reorder those picks automatically: agree a manual migration policy for that league before enabling playoffs.
+
+Verification query:
+
+```sql
+SELECT tablename
+FROM pg_tables
+WHERE schemaname = 'public'
+  AND tablename IN ('league_playoffs', 'league_playoff_pick_selections')
+ORDER BY tablename;
+```
+
+Active-draft preflight (add `WHERE cp.league_id = 30` immediately before `GROUP BY` to inspect the example league only):
+
+```sql
+WITH active_leagues AS (
+    SELECT
+        l.id AS league_id,
+        l.season_id,
+        l.initial_race_round,
+        COUNT(lm.id)::int AS player_count
+    FROM leagues l
+    JOIN league_members lm ON lm.league_id = l.id
+    WHERE l.status = 'active'
+      AND l.initial_race_round IS NOT NULL
+    GROUP BY l.id, l.season_id, l.initial_race_round
+    HAVING COUNT(lm.id) > 0
+), playable_races AS (
+    SELECT
+        al.league_id,
+        r.id AS race_id,
+        r.round,
+        al.player_count,
+        ROW_NUMBER() OVER (PARTITION BY al.league_id ORDER BY r.round) AS race_number,
+        COUNT(*) OVER (PARTITION BY al.league_id) AS race_count
+    FROM active_leagues al
+    JOIN races r ON r.season_id = al.season_id
+              AND r.round >= al.initial_race_round
+              AND r.status <> 'cancelled'
+), candidate_playoffs AS (
+    SELECT *
+    FROM playable_races
+    WHERE race_count / player_count > 0
+      AND race_count % player_count > 0
+      AND race_number > race_count - (race_count % player_count)
+)
+SELECT
+    cp.league_id,
+    cp.race_id,
+    cp.round,
+    rd.id AS draft_id,
+    rd.current_pick_index,
+    COUNT(DISTINCT pp.id)::int AS player_pick_count,
+    (
+        SELECT COUNT(*)::int
+        FROM player_bans pb
+        WHERE pb.draft_id = rd.id
+    ) AS ban_count
+FROM candidate_playoffs cp
+JOIN race_drafts rd ON rd.league_id = cp.league_id AND rd.race_id = cp.race_id
+LEFT JOIN player_picks pp ON pp.draft_id = rd.id
+GROUP BY cp.league_id, cp.race_id, cp.round, rd.id, rd.current_pick_index
+HAVING rd.current_pick_index > 0
+    OR COUNT(DISTINCT pp.id) > 0
+    OR EXISTS (
+        SELECT 1
+        FROM player_bans pb
+        WHERE pb.draft_id = rd.id
+    )
+ORDER BY cp.league_id, cp.round;
+```
+
+---
+
 ## Rules / Best Practices
 
 - **Never modify** a migration that has already run on production.

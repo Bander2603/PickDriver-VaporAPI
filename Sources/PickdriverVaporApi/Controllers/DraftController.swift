@@ -80,6 +80,8 @@ struct DraftController: RouteCollection {
             throw Abort(.notFound, reason: "Draft not available for cancelled race")
         }
 
+        try await PlayoffService.requireDraftReady(leagueID: leagueID, raceID: raceID, on: req.db)
+
         let now = Date()
         if race.completed || (race.raceTime != nil && race.raceTime! < now) {
             throw Abort(.badRequest, reason: "Race already started")
@@ -92,7 +94,7 @@ struct DraftController: RouteCollection {
         guard driver.seasonID == race.seasonID else {
             throw Abort(.badRequest, reason: "Driver is not in this season")
         }
-        let deadlines = try makeDraftDeadlines(leagueID: leagueID, raceID: raceID, race: race)
+        let deadlines = try await makeDraftDeadlines(leagueID: leagueID, raceID: raceID, race: race, on: req.db)
 
         let outcome = try await req.db.transaction { tx -> (DraftResponse, PendingTurnNotification?) in
             guard let sql = tx as? (any SQLDatabase) else {
@@ -406,11 +408,13 @@ struct DraftController: RouteCollection {
             throw Abort(.notFound, reason: "Draft not available for cancelled race")
         }
 
+        try await PlayoffService.requireDraftReady(leagueID: leagueID, raceID: raceID, on: req.db)
+
         let now = Date()
         if race.completed || (race.raceTime != nil && race.raceTime! < now) {
             throw Abort(.badRequest, reason: "Race already started")
         }
-        let deadlines = try makeDraftDeadlines(leagueID: leagueID, raceID: raceID, race: race)
+        let deadlines = try await makeDraftDeadlines(leagueID: leagueID, raceID: raceID, race: race, on: req.db)
 
         let outcome = try await req.db.transaction { tx -> (DraftResponse, PendingTurnNotification?) in
             guard let sql = tx as? (any SQLDatabase) else {
@@ -687,12 +691,22 @@ struct DraftController: RouteCollection {
         return draft
     }
 
-    private func makeDraftDeadlines(leagueID: Int, raceID: Int, race: Race) throws -> DraftDeadline {
+    private func makeDraftDeadlines(
+        leagueID: Int,
+        raceID: Int,
+        race: Race,
+        on database: any Database
+    ) async throws -> DraftDeadline {
         guard let fp1 = race.fp1Time else {
             throw Abort(.notFound, reason: "Race not found or FP1 time missing.")
         }
 
-        let firstHalfDeadline = fp1.addingTimeInterval(-36 * 3600)
+        let firstHalfDeadline = try await PlayoffService.firstHalfDraftDeadline(
+            leagueID: leagueID,
+            raceID: raceID,
+            fp1Time: fp1,
+            on: database
+        )
         return DraftDeadline(
             raceID: raceID,
             leagueID: leagueID,
