@@ -155,15 +155,22 @@ SELECT
     rd.id AS draft_id,
     rd.current_pick_index,
     COUNT(DISTINCT pp.id)::int AS player_pick_count,
-    COUNT(DISTINCT pb.id)::int AS ban_count
+    (
+        SELECT COUNT(*)::int
+        FROM player_bans pb
+        WHERE pb.draft_id = rd.id
+    ) AS ban_count
 FROM candidate_playoffs cp
 JOIN race_drafts rd ON rd.league_id = cp.league_id AND rd.race_id = cp.race_id
 LEFT JOIN player_picks pp ON pp.draft_id = rd.id
-LEFT JOIN player_bans pb ON pb.draft_id = rd.id
 GROUP BY cp.league_id, cp.race_id, cp.round, rd.id, rd.current_pick_index
 HAVING rd.current_pick_index > 0
     OR COUNT(DISTINCT pp.id) > 0
-    OR COUNT(DISTINCT pb.id) > 0
+    OR EXISTS (
+        SELECT 1
+        FROM player_bans pb
+        WHERE pb.draft_id = rd.id
+    )
 ORDER BY cp.league_id, cp.round;
 ```
 
