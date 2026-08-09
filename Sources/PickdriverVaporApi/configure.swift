@@ -272,6 +272,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddAutoPickToPlayerPicks())
     app.migrations.add(CreatePlayerAutopicks())
     app.migrations.add(AddProtectedRepickStateToRaceDrafts())
+    app.migrations.add(CreateLeaguePlayoffs())
 
     // Results + maintenance
     app.migrations.add(CreateRaceResults())
@@ -292,6 +293,7 @@ public func configure(_ app: Application) async throws {
         ) { _ in
             Task {
                 await DraftDeadlineProcessor.processExpiredDrafts(app: app)
+                await PlayoffService.processExpiredSelections(app: app)
             }
         }
     }

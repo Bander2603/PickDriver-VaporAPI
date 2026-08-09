@@ -167,6 +167,8 @@ struct RaceController: RouteCollection {
             try await race.save(on: req.db)
         }
 
+        try await PlayoffService.synchronizeActiveLeagues(on: req.db)
+
         let created = try await NotificationService.notifyRaceResults(
             on: req.db,
             app: req.application,

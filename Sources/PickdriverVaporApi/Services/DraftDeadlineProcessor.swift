@@ -60,7 +60,12 @@ struct DraftDeadlineProcessor {
                     continue
                 }
 
-                let firstHalfDeadline = row.fp1_time.addingTimeInterval(-36 * 3600)
+                let firstHalfDeadline = try await PlayoffService.firstHalfDraftDeadline(
+                    leagueID: row.league_id,
+                    raceID: row.race_id,
+                    fp1Time: row.fp1_time,
+                    on: app.db
+                )
                 let deadlines = DraftDeadline(
                     raceID: row.race_id,
                     leagueID: row.league_id,

@@ -84,6 +84,17 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 - For each upcoming race from `initialRaceRound`, order is rotated.
 - If `mirrorEnabled = true`, order is duplicated with mirror logic (`rotated + reversed`).
 
+### Playoffs
+- Playoffs are automatic for active leagues. Count the non-cancelled races from `initialRaceRound` and the league players (`P`).
+- At least one complete regular rotation is required. If the schedule has `R` playable races and `R / P == 0`, no playoffs are created. Otherwise, the final `R % P` races are playoffs; a zero remainder means no playoffs.
+- The calendar is synchronized while no player has selected a playoff position, so added or cancelled races (including an FP1 change) can still move the boundary and deadline. The first player choice freezes the bracket; later calendar changes do not rewrite player choices or completed/in-progress drafts.
+- Once every regular-season race has published results, standings are frozen for playoff seeding. Players are sorted by total points descending; ties use `userID` ascending. The top group has `ceil(P / 2)` players and the lower group has the remainder.
+- Teams are ignored for playoff ordering. Players choose an unused absolute pick position in their own group, one at a time in seeded order. The final player receives the only remaining position in their group automatically.
+- The selection deadline is `24h` before FP1 of the first playoff race. At or after that deadline, all still-unselected positions are assigned randomly within their groups and the order is finalized.
+- The first playoff draft uses `topGroup + bottomGroup`. Subsequent drafts rotate each group independently by one place. With mirror enabled, each playoff draft is `topGroup + bottomGroup + topGroup.reversed() + bottomGroup.reversed()`; it does not reverse the combined group order.
+- Since the pick-position deadline (FP1 - 24h) is later than a regular first-half draft deadline (FP1 - 36h), every slot of the first playoff draft remains manually playable until FP1. Later playoff drafts use the normal deadline split.
+- Picks, bans, protected repicks, deleted-user skips, autopick scoring, and race-start blocking retain their existing draft behavior after the playoff order has been finalized.
+
 ### Deadlines
 - `firstHalfDeadline = fp1Time - 36h`
 - `secondHalfDeadline = fp1Time`
