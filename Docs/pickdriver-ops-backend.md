@@ -41,6 +41,14 @@ This document describes the current backend status for `PickDriver Ops` and the 
   - response remains `200`
   - payload includes `auditLogged=false`
 
+### League playoff configuration
+
+- `PATCH /api/internal/ops/leagues/:leagueID/playoffs`
+- Required header: `X-Internal-Token`
+- Request: `{ "playoffs_enabled": Bool, "source": String? }`
+- This is the only supported administrative path to enable or disable a league's playoffs. It persists the option, reconciles untouched future drafts immediately, and records an Ops audit event.
+- The endpoint never reclassifies completed or active drafts. Disabling is rejected after a player chooses a playoff position, a bracket is finalized, or a playoff draft has activity.
+
 ### Relevant environment variables
 
 - `APP_VERSION`
@@ -80,4 +88,3 @@ This document describes the current backend status for `PickDriver Ops` and the 
 - Progressive degradation view (not only up/down).
 - Anomaly timeline with dependency context.
 - Endpoint-level drill-down by time window.
-

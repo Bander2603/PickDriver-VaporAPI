@@ -85,9 +85,13 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 - If `mirrorEnabled = true`, order is duplicated with mirror logic (`rotated + reversed`).
 
 ### Playoffs
-- Playoffs are automatic for active leagues. Count the non-cancelled races from `initialRaceRound` and the league players (`P`).
+- Playoffs are opt-in per league through `leagues.playoffs_enabled`; it defaults to `false` and is changed only through the internal administrative endpoint. The public league payload exposes the flag so every client reads league options from one place.
+- The playoff calendar is anchored to the first effective draft race (`playoff_schedule_anchor_round`, set when `start-draft` succeeds). A league created after a season has started therefore only counts races it could actually draft; it never counts earlier season races.
+- Count the non-cancelled races from that anchor and the league players (`P`).
 - At least one complete regular rotation is required. If the schedule has `R` playable races and `R / P == 0`, no playoffs are created. Otherwise, the final `R % P` races are playoffs; a zero remainder means no playoffs.
-- The calendar is synchronized while no player has selected a playoff position, so added or cancelled races (including an FP1 change) can still move the boundary and deadline. The first player choice freezes the bracket; later calendar changes do not rewrite player choices or completed/in-progress drafts.
+- Enabling the option after activation immediately creates or reclassifies only the still-pristine future playoff drafts. If the computed playoff suffix includes a completed, in-progress, picked, banned, or protected-repick draft, no partial suffix is created and historical drafts remain regular.
+- The calendar is synchronized while no player has selected a playoff position, so added or cancelled races (including an FP1 change) can still move the boundary and deadline. A recalculation is applied only when every affected playoff draft is pristine; the first player choice freezes the bracket. Later calendar changes do not rewrite player choices or completed/in-progress drafts.
+- Disabling is allowed only before a playoff pick-position selection or playoff draft activity exists; finalized brackets cannot be disabled.
 - A cancelled race never consumes a regular rotation. Consecutive cancelled drafts retain the same calculated order as the next playable race for historical consistency; future unstarted drafts are recalculated when a race is added or cancelled.
 - Once every regular-season race has published results, standings are frozen for playoff seeding. Players are sorted by total points descending; ties use `userID` ascending. The top group has `ceil(P / 2)` players and the lower group has the remainder.
 - Teams are ignored for playoff ordering. Players choose an unused absolute pick position in their own group, one at a time in seeded order. The final player receives the only remaining position in their group automatically.

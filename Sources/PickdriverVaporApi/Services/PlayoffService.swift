@@ -48,6 +48,10 @@ enum PlayoffService {
         let has_bans: Bool
     }
 
+    private struct CountRow: Decodable {
+        let count: Int
+    }
+
     private struct PlayoffIDRow: Decodable {
         let id: Int
     }
@@ -77,6 +81,49 @@ enum PlayoffService {
         for leagueID in activeLeagueIDs {
             try await synchronizeLeague(leagueID: leagueID, on: database, now: now)
         }
+    }
+
+    /// Changes the league-level playoff option through the domain service so
+    /// that the setting and the affected future drafts cannot drift apart.
+    ///
+    /// An active league is anchored to its initial draft race. Pending leagues
+    /// receive that anchor when their draft is activated. Disabling remains
+    /// possible only before player choices or a playoff draft has started.
+    static func setPlayoffsEnabled(
+        leagueID: Int,
+        enabled: Bool,
+        on database: any Database,
+        now: Date = Date()
+    ) async throws -> League {
+        let league = try await database.transaction { transaction -> League in
+            guard let sql = transaction as? (any SQLDatabase) else {
+                throw Abort(.internalServerError, reason: "SQLDatabase required to update playoff configuration.")
+            }
+
+            _ = try await sql.raw("SELECT id FROM leagues WHERE id = \(bind: leagueID) FOR UPDATE").run()
+            guard let league = try await League.find(leagueID, on: transaction) else {
+                throw Abort(.notFound, reason: "League not found.")
+            }
+
+            if !enabled, league.playoffsEnabled {
+                try await requirePlayoffsCanBeDisabled(leagueID: leagueID, sql: sql)
+            }
+
+            league.playoffsEnabled = enabled
+            if enabled,
+               league.playoffScheduleAnchorRound == nil,
+               let initialRaceRound = league.initialRaceRound {
+                league.playoffScheduleAnchorRound = initialRaceRound
+                league.playoffScheduleAnchorAt = now
+            }
+            try await league.save(on: transaction)
+            return league
+        }
+
+        // Reconcile after committing the option. The synchronization itself
+        // refuses to touch completed or otherwise active drafts.
+        try await synchronizeLeague(leagueID: leagueID, on: database, now: now)
+        return league
     }
 
     /// Rebuilds only drafts that are still part of the regular season. Once the
@@ -402,7 +449,7 @@ enum PlayoffService {
     }
 
     private static func makeSchedule(for league: League, on database: any Database) async throws -> Schedule {
-        guard let initialRaceRound = league.initialRaceRound else {
+        guard let initialRaceRound = league.playoffScheduleAnchorRound ?? league.initialRaceRound else {
             return Schedule(races: [], regularRaceCount: 0, regularRaces: [], playoffRaces: [])
         }
 
@@ -417,7 +464,7 @@ enum PlayoffService {
         let playerCount = try await LeagueMember.query(on: database)
             .filter(\.$league.$id == leagueID)
             .count()
-        guard playerCount > 0 else {
+        guard league.playoffsEnabled, playerCount > 0 else {
             return Schedule(races: playableRaces, regularRaceCount: playableRaces.count, regularRaces: playableRaces, playoffRaces: [])
         }
 
@@ -425,12 +472,116 @@ enum PlayoffService {
         let playoffRaceCount = completedRotations > 0 ? playableRaces.count % playerCount : 0
         let regularRaceCount = playableRaces.count - playoffRaceCount
 
+        let candidatePlayoffRaces = Array(playableRaces.dropFirst(regularRaceCount))
+        // If enabling or a calendar change would put a completed or live draft
+        // inside the playoff suffix, retain the all-regular schedule. A partial
+        // suffix would silently change the agreed rotation rules, while moving
+        // the boundary backwards would rewrite history.
+        guard try await playoffBoundaryIsMutable(
+            leagueID: leagueID,
+            races: candidatePlayoffRaces,
+            on: database
+        ) else {
+            return Schedule(races: playableRaces, regularRaceCount: playableRaces.count, regularRaces: playableRaces, playoffRaces: [])
+        }
+
         return Schedule(
             races: playableRaces,
             regularRaceCount: regularRaceCount,
             regularRaces: Array(playableRaces.prefix(regularRaceCount)),
-            playoffRaces: Array(playableRaces.dropFirst(regularRaceCount))
+            playoffRaces: candidatePlayoffRaces
         )
+    }
+
+    /// A boundary may move only while every candidate playoff race is still
+    /// future and its draft is pristine. This is stricter than the database
+    /// `completed` flag on purpose: an in-progress draft is also history that
+    /// must not be converted into a different competition phase.
+    private static func playoffBoundaryIsMutable(
+        leagueID: Int,
+        races: [Race],
+        on database: any Database
+    ) async throws -> Bool {
+        guard !races.isEmpty else {
+            return true
+        }
+        guard races.allSatisfy({ $0.effectiveStatus == .scheduled }) else {
+            return false
+        }
+        guard let sql = database as? (any SQLDatabase) else {
+            throw Abort(.internalServerError, reason: "SQLDatabase required to inspect playoff draft state.")
+        }
+
+        let raceIDs = try races.map { try $0.requireID() }
+        let row = try await sql.raw("""
+            SELECT COUNT(*)::int AS count
+            FROM race_drafts rd
+            WHERE rd.league_id = \(bind: leagueID)
+              AND rd.race_id = ANY(\(bind: raceIDs))
+              AND (
+                    rd.current_pick_index <> 0
+                 OR rd.status NOT IN (\(bind: "pending"), \(bind: "playoff_pending"))
+                 OR rd.protected_repick_user_id IS NOT NULL
+                 OR rd.protected_repick_pick_index IS NOT NULL
+                 OR rd.protected_repick_deadline IS NOT NULL
+                 OR EXISTS (SELECT 1 FROM player_picks pp WHERE pp.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM player_bans pb WHERE pb.draft_id = rd.id)
+              )
+        """).first(decoding: CountRow.self)
+
+        return (row?.count ?? 0) == 0
+    }
+
+    private static func requirePlayoffsCanBeDisabled(
+        leagueID: Int,
+        sql: any SQLDatabase
+    ) async throws {
+        if let playoff = try await lockedPlayoffRow(leagueID: leagueID, sql: sql) {
+            guard playoff.status == "selecting" else {
+                throw Abort(.conflict, reason: "Playoffs cannot be disabled after the pick order has been finalized.")
+            }
+            let selections = try await selectionRows(playoffID: playoff.id, on: sql)
+            guard selections.allSatisfy({ $0.pick_position == nil }) else {
+                throw Abort(.conflict, reason: "Playoffs cannot be disabled after a player has selected a pick position.")
+            }
+
+            let startedBracketDrafts = try await sql.raw("""
+                SELECT COUNT(*)::int AS count
+                FROM race_drafts rd
+                WHERE rd.league_id = \(bind: leagueID)
+                  AND rd.race_id = ANY(\(bind: playoff.playoff_race_ids))
+                  AND (
+                        rd.current_pick_index <> 0
+                     OR rd.protected_repick_user_id IS NOT NULL
+                     OR rd.protected_repick_pick_index IS NOT NULL
+                     OR rd.protected_repick_deadline IS NOT NULL
+                     OR EXISTS (SELECT 1 FROM player_picks pp WHERE pp.draft_id = rd.id)
+                     OR EXISTS (SELECT 1 FROM player_bans pb WHERE pb.draft_id = rd.id)
+                  )
+            """).first(decoding: CountRow.self)
+            guard (startedBracketDrafts?.count ?? 0) == 0 else {
+                throw Abort(.conflict, reason: "Playoffs cannot be disabled after a playoff draft has started.")
+            }
+            try await sql.raw("DELETE FROM league_playoffs WHERE id = \(bind: playoff.id)").run()
+        }
+
+        let protectedDrafts = try await sql.raw("""
+            SELECT COUNT(*)::int AS count
+            FROM race_drafts rd
+            WHERE rd.league_id = \(bind: leagueID)
+              AND rd.status = \(bind: "playoff_pending")
+              AND (
+                    rd.current_pick_index <> 0
+                 OR rd.protected_repick_user_id IS NOT NULL
+                 OR rd.protected_repick_pick_index IS NOT NULL
+                 OR rd.protected_repick_deadline IS NOT NULL
+                 OR EXISTS (SELECT 1 FROM player_picks pp WHERE pp.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM player_bans pb WHERE pb.draft_id = rd.id)
+              )
+        """).first(decoding: CountRow.self)
+        guard (protectedDrafts?.count ?? 0) == 0 else {
+            throw Abort(.conflict, reason: "Playoffs cannot be disabled after a playoff draft has started.")
+        }
     }
 
     private static func synchronizeUnfrozenDrafts(
@@ -464,12 +615,16 @@ enum PlayoffService {
 
                 let draftID = try draft.requireID()
                 let activity = try await draftActivity(draftID: draftID, on: database)
+                let isMutable = !activity.has_picks
+                    && !activity.has_bans
+                    && draft.currentPickIndex == 0
+                    && draft.protectedRepickUserID == nil
+                    && draft.protectedRepickPickIndex == nil
+                    && draft.protectedRepickDeadline == nil
                 if isRegularRace {
                     let needsReconciliation = draft.pickOrder != expectedOrder || draft.status == "playoff_pending"
                     if needsReconciliation,
-                       !activity.has_picks,
-                       !activity.has_bans,
-                       draft.currentPickIndex == 0 {
+                       isMutable {
                         draft.pickOrder = expectedOrder
                         draft.currentPickIndex = 0
                         draft.status = "pending"
@@ -478,7 +633,7 @@ enum PlayoffService {
                         draft.protectedRepickDeadline = nil
                         try await draft.save(on: database)
                     }
-                } else if !activity.has_picks && !activity.has_bans {
+                } else if isMutable {
                     draft.pickOrder = []
                     draft.currentPickIndex = 0
                     draft.status = "playoff_pending"

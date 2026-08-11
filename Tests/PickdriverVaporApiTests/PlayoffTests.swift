@@ -4,6 +4,8 @@ import Fluent
 @testable import PickdriverVaporApi
 
 final class PlayoffTests: XCTestCase {
+    private let internalToken = "test-internal-token"
+
     private struct CreateLeaguePayload: Content {
         let name: String
         let maxPlayers: Int
@@ -18,6 +20,14 @@ final class PlayoffTests: XCTestCase {
 
     private struct PlayoffPickPositionPayload: Content {
         let pickPosition: Int
+    }
+
+    private struct LeaguePlayoffConfigurationPayload: Content {
+        let playoffsEnabled: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case playoffsEnabled = "playoffs_enabled"
+        }
     }
 
     private struct PlayoffStatus: Content {
@@ -77,6 +87,18 @@ final class PlayoffTests: XCTestCase {
         }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
         })
+    }
+
+    private func setPlayoffsEnabled(app: Application, leagueID: Int, enabled: Bool) async throws -> League.Public {
+        var league: League.Public?
+        try await app.test(.PATCH, "/api/internal/ops/leagues/\(leagueID)/playoffs", beforeRequest: { req async throws in
+            req.headers.replaceOrAdd(name: "X-Internal-Token", value: internalToken)
+            try req.content.encode(LeaguePlayoffConfigurationPayload(playoffsEnabled: enabled))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            league = try res.content.decode(League.Public.self)
+        })
+        return try XCTUnwrap(league)
     }
 
     private func playoffStatus(app: Application, token: String, leagueID: Int) async throws -> PlayoffStatus {
@@ -175,6 +197,7 @@ final class PlayoffTests: XCTestCase {
             }
 
             try await startDraft(app: app, token: users[0].token, leagueID: leagueID)
+            _ = try await setPlayoffsEnabled(app: app, leagueID: leagueID, enabled: true)
 
             let firstPlayoffRaceID = try races[16].requireID()
             let secondPlayoffRaceID = try races[17].requireID()
@@ -303,6 +326,7 @@ final class PlayoffTests: XCTestCase {
                 try await joinLeague(app: app, token: user.token, code: league.code)
             }
             try await startDraft(app: app, token: users[0].token, leagueID: leagueID)
+            _ = try await setPlayoffsEnabled(app: app, leagueID: leagueID, enabled: true)
 
             for race in races.prefix(4) {
                 race.setStatus(.completed)
@@ -373,6 +397,7 @@ final class PlayoffTests: XCTestCase {
                 try await joinLeague(app: app, token: user.token, code: league.code)
             }
             try await startDraft(app: app, token: users[0].token, leagueID: leagueID)
+            _ = try await setPlayoffsEnabled(app: app, leagueID: leagueID, enabled: true)
 
             for race in races.prefix(4) {
                 race.setStatus(.completed)
@@ -430,6 +455,7 @@ final class PlayoffTests: XCTestCase {
                 try await joinLeague(app: app, token: user.token, code: league.code)
             }
             try await startDraft(app: app, token: users[0].token, leagueID: leagueID)
+            _ = try await setPlayoffsEnabled(app: app, leagueID: leagueID, enabled: true)
 
             let firstRaceID = try initialRaces[0].requireID()
             let roundThreeRaceID = try initialRaces[1].requireID()
@@ -482,6 +508,190 @@ final class PlayoffTests: XCTestCase {
             XCTAssertEqual(status.status, "regular_season")
             XCTAssertEqual(status.regularRaceCount, 3)
             XCTAssertEqual(status.playoffRaceIDs, [roundFourRaceID, roundFiveRaceID])
+        }
+    }
+
+    func testInternalToggleStartsDisabledAndCreatesOnlyFuturePlayoffDrafts() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2035, active: true)
+            let seasonID = try season.requireID()
+            let fp1 = makeUTCDate(year: 2035, month: 9, day: 1)
+            var races: [Race] = []
+            for round in 1...5 {
+                let raceFP1 = fp1.addingTimeInterval(TimeInterval((round - 1) * 7 * 24 * 3600))
+                races.append(try await TestSeed.createRace(
+                    app: app,
+                    seasonID: seasonID,
+                    round: round,
+                    name: "Admin Toggle Race \(round)",
+                    completed: false,
+                    fp1Time: raceFP1,
+                    raceTime: raceFP1.addingTimeInterval(2 * 24 * 3600)
+                ))
+            }
+
+            let users = try await (1...4).asyncMap { index in
+                try await TestAuth.register(app: app, username: "admin_toggle_\(index)", email: "admin_toggle_\(index)@test.com")
+            }
+            let league = try await createLeague(app: app, token: users[0].token, maxPlayers: 4, mirrorEnabled: false)
+            let leagueID = try XCTUnwrap(league.id)
+            XCTAssertFalse(league.playoffsEnabled)
+            for user in users.dropFirst() {
+                try await joinLeague(app: app, token: user.token, code: league.code)
+            }
+            try await startDraft(app: app, token: users[0].token, leagueID: leagueID)
+
+            let lastRaceID = try races[4].requireID()
+            let regularDraftQuery = try await RaceDraft.query(on: app.db)
+                .filter(\.$league.$id == leagueID)
+                .filter(\.$raceID == lastRaceID)
+                .first()
+            let regularDraft = try XCTUnwrap(regularDraftQuery)
+            XCTAssertEqual(regularDraft.status, "pending")
+            XCTAssertEqual(regularDraft.pickOrder.count, 4)
+
+            try await app.test(.PATCH, "/api/internal/ops/leagues/\(leagueID)/playoffs", afterResponse: { res async throws in
+                XCTAssertEqual(res.status, .unauthorized)
+            })
+
+            let updatedLeague = try await setPlayoffsEnabled(app: app, leagueID: leagueID, enabled: true)
+            XCTAssertTrue(updatedLeague.playoffsEnabled)
+            XCTAssertEqual(updatedLeague.initialRaceRound, 1)
+
+            let playoffDraftQuery = try await RaceDraft.query(on: app.db)
+                .filter(\.$league.$id == leagueID)
+                .filter(\.$raceID == lastRaceID)
+                .first()
+            let playoffDraft = try XCTUnwrap(playoffDraftQuery)
+            XCTAssertEqual(playoffDraft.status, "playoff_pending")
+            XCTAssertEqual(playoffDraft.pickOrder, [])
+        }
+    }
+
+    func testEnablingPlayoffsNeverReclassifiesACompletedCandidateRace() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2036, active: true)
+            let seasonID = try season.requireID()
+            let fp1 = makeUTCDate(year: 2036, month: 10, day: 1)
+            var races: [Race] = []
+            for round in 1...5 {
+                let raceFP1 = fp1.addingTimeInterval(TimeInterval((round - 1) * 7 * 24 * 3600))
+                races.append(try await TestSeed.createRace(
+                    app: app,
+                    seasonID: seasonID,
+                    round: round,
+                    name: "Historical Safety Race \(round)",
+                    completed: false,
+                    fp1Time: raceFP1,
+                    raceTime: raceFP1.addingTimeInterval(2 * 24 * 3600)
+                ))
+            }
+
+            let users = try await (1...4).asyncMap { index in
+                try await TestAuth.register(app: app, username: "historical_safety_\(index)", email: "historical_safety_\(index)@test.com")
+            }
+            let league = try await createLeague(app: app, token: users[0].token, maxPlayers: 4, mirrorEnabled: false)
+            let leagueID = try XCTUnwrap(league.id)
+            for user in users.dropFirst() {
+                try await joinLeague(app: app, token: user.token, code: league.code)
+            }
+            try await startDraft(app: app, token: users[0].token, leagueID: leagueID)
+
+            let candidateRace = races[4]
+            let candidateRaceID = try candidateRace.requireID()
+            let originalDraftQuery = try await RaceDraft.query(on: app.db)
+                .filter(\.$league.$id == leagueID)
+                .filter(\.$raceID == candidateRaceID)
+                .first()
+            let originalDraft = try XCTUnwrap(originalDraftQuery)
+            let originalOrder = originalDraft.pickOrder
+            candidateRace.setStatus(.completed)
+            try await candidateRace.save(on: app.db)
+
+            _ = try await setPlayoffsEnabled(app: app, leagueID: leagueID, enabled: true)
+
+            let preservedDraftQuery = try await RaceDraft.query(on: app.db)
+                .filter(\.$league.$id == leagueID)
+                .filter(\.$raceID == candidateRaceID)
+                .first()
+            let preservedDraft = try XCTUnwrap(preservedDraftQuery)
+            XCTAssertEqual(preservedDraft.status, "pending")
+            XCTAssertEqual(preservedDraft.pickOrder, originalOrder)
+
+            let status = try await playoffStatus(app: app, token: users[0].token, leagueID: leagueID)
+            XCTAssertFalse(status.enabled)
+            XCTAssertEqual(status.status, "not_applicable")
+        }
+    }
+
+    func testLateLeagueUsesItsDraftStartAsPlayoffScheduleAnchor() async throws {
+        try await withTestApp { app in
+            let season = try await TestSeed.createSeason(app: app, year: 2037, active: true)
+            let seasonID = try season.requireID()
+            let fp1 = makeUTCDate(year: 2037, month: 11, day: 1)
+
+            for round in 1...6 {
+                let raceFP1 = fp1.addingTimeInterval(TimeInterval((round - 1) * 7 * 24 * 3600))
+                _ = try await TestSeed.createRace(
+                    app: app,
+                    seasonID: seasonID,
+                    round: round,
+                    name: "Past Race \(round)",
+                    completed: true,
+                    fp1Time: raceFP1,
+                    raceTime: raceFP1.addingTimeInterval(2 * 24 * 3600)
+                )
+            }
+
+            var availableRaces: [Race] = []
+            for round in 7...11 {
+                let raceFP1 = fp1.addingTimeInterval(TimeInterval((round - 1) * 7 * 24 * 3600))
+                availableRaces.append(try await TestSeed.createRace(
+                    app: app,
+                    seasonID: seasonID,
+                    round: round,
+                    name: "Available Race \(round)",
+                    completed: false,
+                    fp1Time: raceFP1,
+                    raceTime: raceFP1.addingTimeInterval(2 * 24 * 3600)
+                ))
+            }
+
+            let users = try await (1...4).asyncMap { index in
+                try await TestAuth.register(app: app, username: "late_anchor_\(index)", email: "late_anchor_\(index)@test.com")
+            }
+            let league = try await createLeague(app: app, token: users[0].token, maxPlayers: 4, mirrorEnabled: false)
+            let leagueID = try XCTUnwrap(league.id)
+            for user in users.dropFirst() {
+                try await joinLeague(app: app, token: user.token, code: league.code)
+            }
+            try await startDraft(app: app, token: users[0].token, leagueID: leagueID)
+            _ = try await setPlayoffsEnabled(app: app, leagueID: leagueID, enabled: true)
+
+            let storedLeagueQuery = try await League.find(leagueID, on: app.db)
+            let storedLeague = try XCTUnwrap(storedLeagueQuery)
+            XCTAssertEqual(storedLeague.initialRaceRound, 7)
+            XCTAssertEqual(storedLeague.playoffScheduleAnchorRound, 7)
+
+            let thirdAvailableRaceID = try availableRaces[2].requireID()
+            let finalAvailableRaceID = try availableRaces[4].requireID()
+            let thirdDraftQuery = try await RaceDraft.query(on: app.db)
+                .filter(\.$league.$id == leagueID)
+                .filter(\.$raceID == thirdAvailableRaceID)
+                .first()
+            let thirdDraft = try XCTUnwrap(thirdDraftQuery)
+            let finalDraftQuery = try await RaceDraft.query(on: app.db)
+                .filter(\.$league.$id == leagueID)
+                .filter(\.$raceID == finalAvailableRaceID)
+                .first()
+            let finalDraft = try XCTUnwrap(finalDraftQuery)
+            XCTAssertEqual(thirdDraft.pickOrder.count, 4)
+            XCTAssertEqual(finalDraft.pickOrder, [])
+            XCTAssertEqual(finalDraft.status, "playoff_pending")
+
+            let status = try await playoffStatus(app: app, token: users[0].token, leagueID: leagueID)
+            XCTAssertEqual(status.regularRaceCount, 4)
+            XCTAssertEqual(status.playoffRaceIDs, [finalAvailableRaceID])
         }
     }
 

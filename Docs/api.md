@@ -74,7 +74,8 @@ Leagues and teams:
 Draft:
 - start-draft creates drafts for upcoming races from initial_race_round.
 - pickOrder includes mirrored picks if mirror_picks_enabled = true.
-- Playoffs are determined dynamically from playable scheduled races and league size. After at least one complete regular rotation, the remainder races are playoffs. Their player-selected order is only available after all regular-season results are complete.
+- Playoffs are determined dynamically only when `LeaguePublic.playoffs_enabled` is `true`. The eligible calendar starts at the league's effective first draft race, not at the start of a season already in progress. After at least one complete regular rotation, the remainder races are playoffs. Their player-selected order is only available after all regular-season results are complete.
+- Calendar additions and cancellations are applied while every affected playoff draft remains pristine. Completed or active drafts are never reclassified; if the computed suffix would include one, no partial playoff suffix is created.
 - Playoff pick-position selection closes 24 hours before FP1 of the first playoff race; remaining positions are randomized within their seeded group.
 - The first playoff draft remains manually playable until FP1 because its player-selected order can remain open until FP1 - 24h. Later playoff drafts use the ordinary first-half and FP1 deadlines.
 - Deadlines: firstHalfDeadline = fp1 - 36h; secondHalfDeadline = fp1.
@@ -136,6 +137,11 @@ Notifications:
   - Required header: `X-Internal-Token`
   - Req: `{ "user_id": Int, "title": String?, "body": String?, "league_id": Int?, "race_id": Int?, "draft_id": Int?, "pick_index": Int? }`
   - Res: `{ "userID": Int, "attempted": Int, "delivered": Int, "invalidated": Int, "failed": Int, "results": [{ "tokenID": Int?, "tokenSuffix": String, "status": String, "reason": String? }], "sentAt": Date }`
+- PATCH /api/internal/ops/leagues/:leagueID/playoffs
+  - Required header: `X-Internal-Token`
+  - Req: `{ "playoffs_enabled": Bool, "source": String? }`
+  - Res: `LeaguePublic`
+  - Notes: administrative only. Enabling an active league recalculates its future pristine drafts immediately; disabling is rejected after a playoff choice, finalized bracket, or started playoff draft.
 
 Maintenance notes:
 - When `maintenanceMode` is enabled, API returns `503` for `/api/*` routes except `/api/health/*` and `/api/internal/*`.
@@ -311,7 +317,7 @@ UserPublic:
 { "id": Int, "username": String, "email": String, "emailVerified": Bool }
 
 LeaguePublic:
-{ "id": Int, "name": String, "invite_code": String, "status": String, "initial_race_round": Int?, "owner_id": Int, "max_players": Int, "teams_enabled": Bool, "bans_enabled": Bool, "mirror_picks_enabled": Bool }
+{ "id": Int, "name": String, "invite_code": String, "status": String, "initial_race_round": Int?, "owner_id": Int, "max_players": Int, "teams_enabled": Bool, "bans_enabled": Bool, "mirror_picks_enabled": Bool, "playoffs_enabled": Bool }
 
 Race:
 {

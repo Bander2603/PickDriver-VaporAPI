@@ -273,6 +273,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(CreatePlayerAutopicks())
     app.migrations.add(AddProtectedRepickStateToRaceDrafts())
     app.migrations.add(CreateLeaguePlayoffs())
+    app.migrations.add(AddLeaguePlayoffConfiguration())
 
     // Results + maintenance
     app.migrations.add(CreateRaceResults())

@@ -401,6 +401,8 @@ struct LeagueController: RouteCollection {
 
             league.status = "active"
             league.initialRaceRound = race.round
+            league.playoffScheduleAnchorRound = race.round
+            league.playoffScheduleAnchorAt = Date()
             try await league.save(on: tx)
 
             let allRaces = try await Race.query(on: tx)
@@ -413,21 +415,16 @@ struct LeagueController: RouteCollection {
             let baseOrder = pickOrderMembers.map { $0.$user.id }
             var pendingNotification: PendingDraftNotification?
 
-            let completedRotations = allRaces.count / baseOrder.count
-            let playoffRaceCount = completedRotations > 0 ? allRaces.count % baseOrder.count : 0
-            let regularRaceCount = allRaces.count - playoffRaceCount
-
             for (i, race) in allRaces.enumerated() {
                 let rotated = Array(baseOrder.dropFirst(i % baseOrder.count) + baseOrder.prefix(i % baseOrder.count))
                 let pickOrder = league.mirrorEnabled ? rotated + rotated.reversed() : rotated
-                let isRegularRace = i < regularRaceCount
 
                 let draft = RaceDraft(
                     leagueID: leagueID,
                     raceID: try race.requireID(),
-                    pickOrder: isRegularRace ? pickOrder : [],
+                    pickOrder: pickOrder,
                     mirrorPicks: league.mirrorEnabled,
-                    status: isRegularRace ? "pending" : "playoff_pending"
+                    status: "pending"
                 )
                 try await draft.save(on: tx)
 
@@ -443,6 +440,12 @@ struct LeagueController: RouteCollection {
 
             return pendingNotification
         }
+
+        // League activation always starts with ordinary rotations. The optional
+        // playoff configuration then reclassifies only safe future
+        // drafts, which also handles an administrator enabling it while the
+        // league was still pending.
+        try await PlayoffService.synchronizeLeague(leagueID: leagueID, on: req.db)
 
         if let notification {
             try await NotificationService.notifyDraftTurn(

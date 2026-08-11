@@ -40,6 +40,15 @@ final class League: Model, Content, @unchecked Sendable {
 
     @Field(key: "mirror_picks_enabled")
     var mirrorEnabled: Bool
+
+    @Field(key: "playoffs_enabled")
+    var playoffsEnabled: Bool
+
+    @OptionalField(key: "playoff_schedule_anchor_round")
+    var playoffScheduleAnchorRound: Int?
+
+    @OptionalField(key: "playoff_schedule_anchor_at")
+    var playoffScheduleAnchorAt: Date?
     
     @Field(key: "max_players")
     var maxPlayers: Int
@@ -50,7 +59,8 @@ final class League: Model, Content, @unchecked Sendable {
     init() {}
 
     init(id: Int? = nil, name: String, code: String, status: String, initialRaceRound: Int? = nil, creatorID: Int,
-         teamsEnabled: Bool = false, bansEnabled: Bool = false, mirrorEnabled: Bool = false, maxPlayers: Int, seasonID: Int) {
+         teamsEnabled: Bool = false, bansEnabled: Bool = false, mirrorEnabled: Bool = false,
+         playoffsEnabled: Bool = false, maxPlayers: Int, seasonID: Int) {
         self.id = id
         self.name = name
         self.code = code
@@ -60,6 +70,9 @@ final class League: Model, Content, @unchecked Sendable {
         self.teamsEnabled = teamsEnabled
         self.bansEnabled = bansEnabled
         self.mirrorEnabled = mirrorEnabled
+        self.playoffsEnabled = playoffsEnabled
+        self.playoffScheduleAnchorRound = nil
+        self.playoffScheduleAnchorAt = nil
         self.maxPlayers = maxPlayers
         self.seasonID = seasonID
     }
@@ -148,6 +161,7 @@ extension League {
         let teamsEnabled: Bool
         let bansEnabled: Bool
         let mirrorEnabled: Bool
+        let playoffsEnabled: Bool
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -160,6 +174,7 @@ extension League {
             case teamsEnabled = "teams_enabled"
             case bansEnabled = "bans_enabled"
             case mirrorEnabled = "mirror_picks_enabled"
+            case playoffsEnabled = "playoffs_enabled"
         }
     }
 
@@ -174,7 +189,8 @@ extension League {
             maxPlayers: maxPlayers,
             teamsEnabled: teamsEnabled,
             bansEnabled: bansEnabled,
-            mirrorEnabled: mirrorEnabled
+            mirrorEnabled: mirrorEnabled,
+            playoffsEnabled: playoffsEnabled
         )
     }
 }

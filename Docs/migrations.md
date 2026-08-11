@@ -91,18 +91,24 @@ WHERE schemaname='public' AND tablename='users' AND indexname='idx_users_deleted
 
 ---
 
-## Playoffs Migration
+## Playoffs Migrations
 
-The playoffs feature introduces migration `CreateLeaguePlayoffs`:
+The initial playoffs feature introduces migration `CreateLeaguePlayoffs`:
 
 - `league_playoffs`: one persisted playoff bracket per league, including the regular-race boundary, the complete locked set of playoff race IDs, first playoff race, selection deadline, frozen standings order, group size, and finalized first pick order.
 - `league_playoff_pick_selections`: one position-selection record per seeded player, with unique ranks and chosen positions.
 
+The opt-in configuration introduces migration `AddLeaguePlayoffConfiguration`:
+
+- `leagues.playoffs_enabled`: defaults to `false`; a persisted, existing playoff bracket is backfilled to `true` to preserve its authoritative state.
+- `leagues.playoff_schedule_anchor_round`: the first effective draft round. Existing leagues are backfilled from `initial_race_round`; new leagues set it transactionally when `start-draft` succeeds.
+- `leagues.playoff_schedule_anchor_at`: UTC audit timestamp for anchors created after this migration.
+
 Deployment requirement:
 
-- Apply this migration before deploying the API version that exposes `/api/leagues/:leagueID/playoffs`.
-- Existing active leagues remain compatible: their schedule is reconciled on normal draft/deadline processing and when a playoff endpoint is read. No historical draft rows are rewritten after the playoff bracket has been finalized.
-- Before production rollout, run the preflight below. If it returns rows, the affected league has already started a draft that the new dynamic calendar would classify as a playoff race. Do not delete or reorder those picks automatically: agree a manual migration policy for that league before enabling playoffs.
+- Apply `AddLeaguePlayoffConfiguration` before deploying the API version that exposes `playoffs_enabled` and the internal configuration endpoint.
+- Existing active leagues remain compatible: playoffs are disabled unless they already have a persisted bracket. Enable a league only via `PATCH /api/internal/ops/leagues/:leagueID/playoffs`, never with a direct SQL update, so the configuration and draft state are synchronized.
+- No completed, active, picked, banned, or protected-repick draft is reclassified. If the dynamically calculated playoff suffix includes one of these drafts, the league remains in the ordinary schedule instead of receiving a partial bracket.
 
 Verification query:
 
@@ -114,6 +120,15 @@ WHERE schemaname = 'public'
 ORDER BY tablename;
 ```
 
+```sql
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'leagues'
+  AND column_name IN ('playoffs_enabled', 'playoff_schedule_anchor_round', 'playoff_schedule_anchor_at')
+ORDER BY column_name;
+```
+
 Active-draft preflight (add `WHERE cp.league_id = 30` immediately before `GROUP BY` to inspect the example league only):
 
 ```sql
@@ -121,13 +136,14 @@ WITH active_leagues AS (
     SELECT
         l.id AS league_id,
         l.season_id,
-        l.initial_race_round,
+        COALESCE(l.playoff_schedule_anchor_round, l.initial_race_round) AS anchor_round,
         COUNT(lm.id)::int AS player_count
     FROM leagues l
     JOIN league_members lm ON lm.league_id = l.id
-    WHERE l.status = 'active'
-      AND l.initial_race_round IS NOT NULL
-    GROUP BY l.id, l.season_id, l.initial_race_round
+WHERE l.status = 'active'
+      AND l.playoffs_enabled = true
+      AND COALESCE(l.playoff_schedule_anchor_round, l.initial_race_round) IS NOT NULL
+    GROUP BY l.id, l.season_id, COALESCE(l.playoff_schedule_anchor_round, l.initial_race_round)
     HAVING COUNT(lm.id) > 0
 ), playable_races AS (
     SELECT
@@ -139,7 +155,7 @@ WITH active_leagues AS (
         COUNT(*) OVER (PARTITION BY al.league_id) AS race_count
     FROM active_leagues al
     JOIN races r ON r.season_id = al.season_id
-              AND r.round >= al.initial_race_round
+              AND r.round >= al.anchor_round
               AND r.status <> 'cancelled'
 ), candidate_playoffs AS (
     SELECT *

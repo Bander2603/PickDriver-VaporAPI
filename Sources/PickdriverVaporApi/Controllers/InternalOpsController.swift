@@ -7,6 +7,7 @@ struct InternalOpsController: RouteCollection {
         routes.get("db-info", use: dbInfo)
         routes.grouped("backup").post("validate", use: validateBackup)
         routes.grouped("push").post("test", use: testPush)
+        routes.patch("leagues", ":leagueID", "playoffs", use: updateLeaguePlayoffs)
     }
 
     private let expectedCriticalTables: [String] = [
@@ -113,6 +114,30 @@ struct InternalOpsController: RouteCollection {
         let failed: Int
         let results: [PushTestTokenResult]
         let sentAt: Date
+    }
+
+    struct LeaguePlayoffConfigurationRequest: Content {
+        let playoffsEnabled: Bool
+        let source: String?
+
+        enum CodingKeys: String, CodingKey {
+            case playoffsEnabled = "playoffs_enabled"
+            case source
+        }
+    }
+
+    private struct LeaguePlayoffConfigurationAuditMetadata: Content {
+        let leagueID: Int
+        let playoffsEnabled: Bool
+        let anchorRound: Int?
+        let changedAtUtc: Date
+
+        enum CodingKeys: String, CodingKey {
+            case leagueID = "league_id"
+            case playoffsEnabled = "playoffs_enabled"
+            case anchorRound = "anchor_round"
+            case changedAtUtc = "changed_at_utc"
+        }
     }
 
     private enum ResolvedTarget: String {
@@ -304,6 +329,38 @@ struct InternalOpsController: RouteCollection {
             results: results,
             sentAt: Date()
         )
+    }
+
+    /// Administrative, token-protected configuration change. This endpoint is
+    /// intentionally internal because enabling playoffs can reclassify future
+    /// drafts and therefore must not be a normal owner/client mutation.
+    func updateLeaguePlayoffs(_ req: Request) async throws -> League.Public {
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        let payload = try req.content.decode(LeaguePlayoffConfigurationRequest.self)
+        let now = Date()
+        let league = try await PlayoffService.setPlayoffsEnabled(
+            leagueID: leagueID,
+            enabled: payload.playoffsEnabled,
+            on: req.db,
+            now: now
+        )
+
+        _ = await logOpsEvent(
+            on: req,
+            eventType: "league_playoffs_configuration_updated",
+            source: sanitizeSource(payload.source),
+            metadata: LeaguePlayoffConfigurationAuditMetadata(
+                leagueID: leagueID,
+                playoffsEnabled: league.playoffsEnabled,
+                anchorRound: league.playoffScheduleAnchorRound,
+                changedAtUtc: now
+            )
+        )
+
+        return league.convertToPublic()
     }
 
     func dbInfo(_ req: Request) async throws -> DBInfoResponse {
