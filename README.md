@@ -19,7 +19,7 @@ Backend API for a fantasy F1 draft league platform. Built with Vapor + Fluent + 
 ## Project structure
 - `Sources/PickdriverVaporApi`: app code (controllers, models, services, migrations)
 - `Tests/PickdriverVaporApiTests`: integration tests
-- `docs/`: API and business-logic notes
+- `Docs/`: API and business-logic notes
 
 ## Local setup
 1) Copy env file:
@@ -118,14 +118,16 @@ swift test --filter PickDriverVaultTests -v
 ```
 
 ## Docs
-- `docs/api.md`: endpoint list and contract
-- `docs/logic.md`: business rules
-- `docs/migrations.md`: migration operations and deployment checklist
+- `AGENTS.md`: fast entrypoint for AI agents working in this repo
+- `Docs/AI/`: AI workspace context, module map, coding style, patterns, workflows, and task skills
+- `Docs/api.md`: endpoint list and contract
+- `Docs/logic.md`: business rules
+- `Docs/migrations.md`: migration operations and deployment checklist
 
 Quick pointers:
-- iOS/Web integration for account deletion: see `DELETE /api/auth/account` notes in `docs/api.md`.
-- Account-deletion business behavior (`pending` vs `active` leagues): see `docs/logic.md`.
-- Release requirement for account deletion: apply migrations (including `AddDeletedAtToUsers`) as described in `docs/migrations.md`.
+- iOS/Web integration for account deletion: see `DELETE /api/auth/account` notes in `Docs/api.md`.
+- Account-deletion business behavior (`pending` vs `active` leagues): see `Docs/logic.md`.
+- Release requirement for account deletion: apply migrations (including `AddDeletedAtToUsers`) as described in `Docs/migrations.md`.
 
 ## Trademarks
 This project is unofficial and not affiliated with, endorsed by, or sponsored by Formula 1, the FIA, or any related entities. It does not use any official logos or brand assets. “Formula 1”, “F1”, and related marks are trademarks of their respective owners and are used here only for descriptive purposes.

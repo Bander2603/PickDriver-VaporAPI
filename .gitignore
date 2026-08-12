@@ -13,3 +13,7 @@ db.sqlite
 !.env.test.example
 .vscode
 .DS_Store
+
+# Private AI agent guidance; do not publish with the public repository.
+/AGENTS.md
+/Docs/AI/**/*.md

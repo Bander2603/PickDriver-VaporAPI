@@ -11,11 +11,18 @@ From the project root (where `Package.swift` lives):
 
 ```bash
 cd ~/pickdriver-vapor-api
-git pull
-swift build
-swift run PickdriverVaporApi migrate
-pm2 restart vapor-api
+swift build -c release
+.build/release/PickdriverVaporApi migrate --yes
+pm2 restart vapor-api --update-env
 ```
+
+The Raspberry Pi deployment uses Swiftly. Its non-interactive SSH sessions may not put Swift on `PATH`; in that environment invoke the installed executable explicitly, for example:
+
+```bash
+"$HOME/.local/share/swiftly/bin/swift" build -c release
+```
+
+Apply migrations before restarting the API. This keeps the existing binary serving while an additive migration is prepared, and ensures the new binary never starts against an older schema. Verify the local process afterwards on `http://127.0.0.1:3000/api/health/ready`.
 
 If there are no pending migrations, `migrate` finishes without changes.
 
@@ -57,10 +64,9 @@ ORDER BY tablename;
 ### 2) Deploy + apply
 ```bash
 cd ~/pickdriver-vapor-api
-git pull
-swift build
-swift run PickdriverVaporApi migrate
-pm2 restart vapor-api
+swift build -c release
+.build/release/PickdriverVaporApi migrate --yes
+pm2 restart vapor-api --update-env
 ```
 
 ---
