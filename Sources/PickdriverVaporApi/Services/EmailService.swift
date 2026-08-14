@@ -83,7 +83,7 @@ struct LogEmailService: EmailService {
         language: AuthLanguage,
         on req: Request
     ) async throws {
-        req.logger.info("[EMAIL] Verification link for \(email) (\(language.rawValue)): \(verificationLink)")
+        req.logger.warning("[EMAIL] Verification email suppressed because no email provider is configured.")
     }
 
     func sendPasswordResetEmail(
@@ -93,7 +93,7 @@ struct LogEmailService: EmailService {
         language: AuthLanguage,
         on req: Request
     ) async throws {
-        req.logger.info("[EMAIL] Password reset link for \(email) (\(language.rawValue)): \(resetLink)")
+        req.logger.warning("[EMAIL] Password reset email suppressed because no email provider is configured.")
     }
 }
 
