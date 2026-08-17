@@ -17,3 +17,6 @@ db.sqlite
 # Private AI agent guidance; do not publish with the public repository.
 /AGENTS.md
 /Docs/AI/**/*.md
+
+# Personal Obsidian knowledge base; the canonical copy lives outside this repository.
+/Docs/Obsidian/
