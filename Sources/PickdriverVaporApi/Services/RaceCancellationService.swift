@@ -76,6 +76,13 @@ enum RaceCancellationService {
                         FROM player_bans pb
                         WHERE pb.draft_id = rd.id
                     )
+                 OR EXISTS (SELECT 1 FROM v2_draft_slots vs WHERE vs.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM v2_draft_bans vb WHERE vb.draft_id = rd.id)
+                 OR EXISTS (
+                        SELECT 1
+                        FROM draft_pick_preference_snapshots dps
+                        WHERE dps.draft_id = rd.id
+                    )
               )
         """)).all(decoding: CancelledDraftRow.self)
 
@@ -95,12 +102,26 @@ enum RaceCancellationService {
             """)).run()
 
             try await sql.raw(SQLQueryString("""
+                DELETE FROM v2_draft_bans WHERE draft_id = \(bind: draft.draft_id)
+            """)).run()
+            try await sql.raw(SQLQueryString("""
+                DELETE FROM v2_draft_slots WHERE draft_id = \(bind: draft.draft_id)
+            """)).run()
+            try await sql.raw(SQLQueryString("""
+                DELETE FROM draft_pick_preference_snapshots WHERE draft_id = \(bind: draft.draft_id)
+            """)).run()
+
+            try await sql.raw(SQLQueryString("""
                 UPDATE race_drafts
                 SET status = \(bind: Race.Status.cancelled.rawValue),
                     current_pick_index = \(bind: draft.pick_count),
                     protected_repick_user_id = NULL,
                     protected_repick_pick_index = NULL,
                     protected_repick_deadline = NULL,
+                    resolution_state = CASE
+                        WHEN gameplay_version = 'v2' THEN 'cancelled'
+                        ELSE resolution_state
+                    END,
                     updated_at = NOW()
                 WHERE id = \(bind: draft.draft_id)
             """)).run()

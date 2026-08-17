@@ -52,6 +52,7 @@ struct DraftDeadlineProcessor {
                 WHERE r.completed = false
                   AND r.status != \(bind: Race.Status.cancelled.rawValue)
                   AND r.fp1_time IS NOT NULL
+                  AND rd.gameplay_version = \(bind: DraftGameplayVersion.legacy.rawValue)
                   AND rd.current_pick_index < COALESCE(array_length(rd.pick_order, 1), 0)
             """).all(decoding: DraftRow.self)
 

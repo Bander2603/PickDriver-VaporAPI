@@ -176,8 +176,20 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 ## Standings and scoring
 - Only non-banned picks are counted.
 - Autopicks are worth 50% of driver points.
+- V2 resolved picks are materialized with `is_autopick = false` at FP1 and score 100%.
 - Standings are computed over completed races.
 - For mirrored picks, position calculation considers mirror order.
+
+## PickDriver V2
+- Drafts from season 2 round 14 (Dutch GP 2026, production `race_id = 39`) use `gameplay_version = v2`; prior completed history remains legacy.
+- V2 has no player turns. Every league member maintains a private reusable ordered preference list; the resolver freezes one immutable snapshot per draft.
+- Empty or partial lists are valid. If every listed driver is unavailable, the slot remains null and is a missed pick.
+- With bans disabled, snapshot and publication happen at FP1. With bans enabled, they happen 24 hours before FP1 and bans remain open until FP1.
+- Only resolved slot assignments are public. Other players' complete preference snapshots are never returned.
+- A ban removes the selected driver from the target player's effective list and atomically recalculates that slot and every later slot.
+- A player cannot ban themself or a teammate. Each target may be banned at most once per race.
+- Ban budgets cover the whole league season: 2 per user without teams, or 3 shared by a team.
+- Playoff ordering is finalized before the V2 snapshot is captured and resolved.
 
 ## Draft-related notifications
 - Starting draft notifies first user in order.

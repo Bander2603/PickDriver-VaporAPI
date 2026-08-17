@@ -274,6 +274,8 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddProtectedRepickStateToRaceDrafts())
     app.migrations.add(CreateLeaguePlayoffs())
     app.migrations.add(AddLeaguePlayoffConfiguration())
+    app.migrations.add(AddPickDriverV2DraftState())
+    app.migrations.add(CreatePickDriverV2Tables())
 
     // Results + maintenance
     app.migrations.add(CreateRaceResults())
@@ -293,8 +295,9 @@ public func configure(_ app: Application) async throws {
             delay: .seconds(intervalSeconds)
         ) { _ in
             Task {
-                await DraftDeadlineProcessor.processExpiredDrafts(app: app)
                 await PlayoffService.processExpiredSelections(app: app)
+                await DraftDeadlineProcessor.processExpiredDrafts(app: app)
+                await PickDriverV2Service.processDueDrafts(app: app)
             }
         }
     }

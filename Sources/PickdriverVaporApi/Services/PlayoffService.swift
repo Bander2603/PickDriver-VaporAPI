@@ -526,6 +526,9 @@ enum PlayoffService {
                  OR rd.protected_repick_deadline IS NOT NULL
                  OR EXISTS (SELECT 1 FROM player_picks pp WHERE pp.draft_id = rd.id)
                  OR EXISTS (SELECT 1 FROM player_bans pb WHERE pb.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM v2_draft_slots vs WHERE vs.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM v2_draft_bans vb WHERE vb.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM draft_pick_preference_snapshots ds WHERE ds.draft_id = rd.id)
               )
         """).first(decoding: CountRow.self)
 
@@ -557,6 +560,9 @@ enum PlayoffService {
                      OR rd.protected_repick_deadline IS NOT NULL
                      OR EXISTS (SELECT 1 FROM player_picks pp WHERE pp.draft_id = rd.id)
                      OR EXISTS (SELECT 1 FROM player_bans pb WHERE pb.draft_id = rd.id)
+                     OR EXISTS (SELECT 1 FROM v2_draft_slots vs WHERE vs.draft_id = rd.id)
+                     OR EXISTS (SELECT 1 FROM v2_draft_bans vb WHERE vb.draft_id = rd.id)
+                     OR EXISTS (SELECT 1 FROM draft_pick_preference_snapshots ds WHERE ds.draft_id = rd.id)
                   )
             """).first(decoding: CountRow.self)
             guard (startedBracketDrafts?.count ?? 0) == 0 else {
@@ -577,6 +583,9 @@ enum PlayoffService {
                  OR rd.protected_repick_deadline IS NOT NULL
                  OR EXISTS (SELECT 1 FROM player_picks pp WHERE pp.draft_id = rd.id)
                  OR EXISTS (SELECT 1 FROM player_bans pb WHERE pb.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM v2_draft_slots vs WHERE vs.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM v2_draft_bans vb WHERE vb.draft_id = rd.id)
+                 OR EXISTS (SELECT 1 FROM draft_pick_preference_snapshots ds WHERE ds.draft_id = rd.id)
               )
         """).first(decoding: CountRow.self)
         guard (protectedDrafts?.count ?? 0) == 0 else {
@@ -648,7 +657,11 @@ enum PlayoffService {
                     raceID: raceID,
                     pickOrder: isRegularRace ? expectedOrder : [],
                     mirrorPicks: league.mirrorEnabled,
-                    status: isRegularRace ? "pending" : "playoff_pending"
+                    status: isRegularRace ? "pending" : "playoff_pending",
+                    gameplayVersion: PickDriverV2Policy.gameplayVersion(
+                        seasonID: race.seasonID,
+                        round: race.round
+                    )
                 )
                 try await draft.save(on: database)
             }
@@ -913,12 +926,19 @@ enum PlayoffService {
             existingDraft.protectedRepickDeadline = nil
             try await existingDraft.save(on: database)
         } else {
+            guard let race = try await Race.find(raceID, on: database) else {
+                throw Abort(.notFound, reason: "Race not found while creating a playoff draft.")
+            }
             let draft = RaceDraft(
                 leagueID: leagueID,
                 raceID: raceID,
                 pickOrder: pickOrder,
                 mirrorPicks: mirrorPicks,
-                status: "pending"
+                status: "pending",
+                gameplayVersion: PickDriverV2Policy.gameplayVersion(
+                    seasonID: race.seasonID,
+                    round: race.round
+                )
             )
             try await draft.save(on: database)
         }
@@ -1028,8 +1048,15 @@ enum PlayoffService {
     private static func draftActivity(draftID: Int, on sql: any SQLDatabase) async throws -> ExistingDraftState {
         let activity = try await sql.raw("""
             SELECT
-                EXISTS (SELECT 1 FROM player_picks WHERE draft_id = \(bind: draftID)) AS has_picks,
-                EXISTS (SELECT 1 FROM player_bans WHERE draft_id = \(bind: draftID)) AS has_bans
+                (
+                    EXISTS (SELECT 1 FROM player_picks WHERE draft_id = \(bind: draftID))
+                    OR EXISTS (SELECT 1 FROM v2_draft_slots WHERE draft_id = \(bind: draftID))
+                    OR EXISTS (SELECT 1 FROM draft_pick_preference_snapshots WHERE draft_id = \(bind: draftID))
+                ) AS has_picks,
+                (
+                    EXISTS (SELECT 1 FROM player_bans WHERE draft_id = \(bind: draftID))
+                    OR EXISTS (SELECT 1 FROM v2_draft_bans WHERE draft_id = \(bind: draftID))
+                ) AS has_bans
         """).first(decoding: ExistingDraftState.self)
         guard let activity else {
             throw Abort(.notFound, reason: "Draft not found.")

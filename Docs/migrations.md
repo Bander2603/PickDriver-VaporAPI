@@ -287,6 +287,12 @@ ORDER BY created_at;
 
 ## Post-migration sanity checks (examples)
 
+### PickDriver V2 cutover
+
+`AddPickDriverV2DraftState` adds the immutable gameplay version and resolution state to `race_drafts`. It marks incomplete drafts from season 2 round 14 onward as V2 and removes any in-progress legacy picks/bans for those drafts, as those submissions are explicitly ignored at cutover.
+
+`CreatePickDriverV2Tables` creates reusable preferences, immutable per-draft snapshots, resolved slots and auditable V2 bans. The migration is additive for all completed legacy history. Before production migration, confirm the Dutch GP remains `race_id = 39`, season 2, round 14 and take a database backup.
+
 ### Users table columns
 ```sql
 SELECT column_name

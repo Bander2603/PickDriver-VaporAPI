@@ -33,6 +33,8 @@ struct LeagueController: RouteCollection {
         protected.get(":leagueID", "draft", ":raceID", "deadlines", use: getDraftDeadlines)
         protected.get(":leagueID", "autopick", use: getAutopickList)
         protected.put(":leagueID", "autopick", use: upsertAutopickList)
+        protected.get(":leagueID", "pick-preferences", use: getPickPreferences)
+        protected.put(":leagueID", "pick-preferences", use: upsertPickPreferences)
 
     }
 
@@ -70,6 +72,16 @@ struct LeagueController: RouteCollection {
 
     struct AutopickListResponse: Content {
         let driverIDs: [Int]
+    }
+
+    struct PickPreferenceRequest: Content {
+        let driverIDs: [Int]
+    }
+
+    struct PickPreferenceResponse: Content {
+        let driverIDs: [Int]
+        let submitted: Bool
+        let updatedAt: Date?
     }
 
     func getMyLeagues(_ req: Request) async throws -> [League.Public] {
@@ -424,7 +436,11 @@ struct LeagueController: RouteCollection {
                     raceID: try race.requireID(),
                     pickOrder: pickOrder,
                     mirrorPicks: league.mirrorEnabled,
-                    status: "pending"
+                    status: "pending",
+                    gameplayVersion: PickDriverV2Policy.gameplayVersion(
+                        seasonID: race.seasonID,
+                        round: race.round
+                    )
                 )
                 try await draft.save(on: tx)
 
@@ -533,7 +549,7 @@ struct LeagueController: RouteCollection {
             throw Abort(.badRequest, reason: "Missing or invalid leagueID/raceID.")
         }
 
-        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
         try await PlayoffService.synchronizeLeague(leagueID: leagueID, on: req.db)
 
         guard let race = try await Race.find(raceID, on: req.db),
@@ -553,6 +569,22 @@ struct LeagueController: RouteCollection {
             throw Abort(.notFound, reason: "Draft not found for that race.")
         }
 
+        if draft.gameplayVersion == DraftGameplayVersion.v2.rawValue {
+            let submissionDeadline = PickDriverV2Service.submissionDeadline(
+                fp1Time: fp1,
+                bansEnabled: league.bansEnabled
+            )
+            return DraftDeadline(
+                raceID: raceID,
+                leagueID: leagueID,
+                firstHalfDeadline: submissionDeadline,
+                secondHalfDeadline: fp1,
+                gameplayVersion: draft.gameplayVersion,
+                submissionDeadline: submissionDeadline,
+                banWindowClosesAt: league.bansEnabled ? fp1 : nil
+            )
+        }
+
         let firstHalfDeadline = try await PlayoffService.firstHalfDraftDeadline(
             leagueID: leagueID,
             raceID: raceID,
@@ -568,7 +600,8 @@ struct LeagueController: RouteCollection {
             secondHalfDeadline: secondHalfDeadline,
             protectedRepickUserID: draft.protectedRepickUserID,
             protectedRepickPickIndex: draft.protectedRepickPickIndex,
-            protectedRepickDeadline: draft.protectedRepickDeadline
+            protectedRepickDeadline: draft.protectedRepickDeadline,
+            gameplayVersion: draft.gameplayVersion
         )
     }
 
@@ -641,6 +674,79 @@ struct LeagueController: RouteCollection {
         return AutopickListResponse(driverIDs: orderedUnique)
     }
 
+    func getPickPreferences(_ req: Request) async throws -> PickPreferenceResponse {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        let existing = try await PlayerPickPreference.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$user.$id == userID)
+            .first()
+
+        return PickPreferenceResponse(
+            driverIDs: existing?.driverOrder ?? [],
+            submitted: existing != nil,
+            updatedAt: existing?.updatedAt ?? existing?.createdAt
+        )
+    }
+
+    func upsertPickPreferences(_ req: Request) async throws -> PickPreferenceResponse {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league ID.")
+        }
+
+        let league = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        let data = try req.content.decode(PickPreferenceRequest.self)
+        try await PickDriverV2Service.freezeDueDraftsBeforePreferenceUpdate(
+            leagueID: leagueID,
+            on: req.db
+        )
+        var seen = Set<Int>()
+        let orderedUnique = data.driverIDs.filter { seen.insert($0).inserted }
+
+        if !orderedUnique.isEmpty {
+            let validIDs = try await Driver.query(on: req.db)
+                .filter(\.$seasonID == league.seasonID)
+                .filter(\.$active == true)
+                .filter(\.$id ~~ orderedUnique)
+                .all()
+                .compactMap(\.id)
+            guard Set(validIDs).count == orderedUnique.count else {
+                throw Abort(.badRequest, reason: "One or more driver IDs are not active in this league season.")
+            }
+        }
+
+        let preference: PlayerPickPreference
+        if let existing = try await PlayerPickPreference.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$user.$id == userID)
+            .first() {
+            existing.driverOrder = orderedUnique
+            try await existing.save(on: req.db)
+            preference = existing
+        } else {
+            let created = PlayerPickPreference(
+                leagueID: leagueID,
+                userID: userID,
+                driverOrder: orderedUnique
+            )
+            try await created.save(on: req.db)
+            preference = created
+        }
+
+        return PickPreferenceResponse(
+            driverIDs: preference.driverOrder,
+            submitted: true,
+            updatedAt: preference.updatedAt ?? preference.createdAt
+        )
+    }
+
     struct RaceDraftResponse: Content {
         struct LeagueRef: Content {
             let id: Int
@@ -653,6 +759,11 @@ struct LeagueController: RouteCollection {
         let currentPickIndex: Int
         let mirrorPicks: Bool
         let status: String
+        let gameplayVersion: String
+        let resolutionState: String?
+        let resolutionRevision: Int?
+        let submissionDeadline: Date?
+        let banWindowClosesAt: Date?
         let pickedDriverIDs: [Int?]
         let bannedDriverIDs: [Int]
         let bannedDriverIDsByPickIndex: [Int?]
@@ -696,6 +807,20 @@ struct LeagueController: RouteCollection {
         }
 
         let draftID = try draft.requireID()
+
+        if draft.gameplayVersion == DraftGameplayVersion.v2.rawValue {
+            try await PickDriverV2Service.resolveIfDue(draftID: draftID, on: req.db)
+            guard let refreshedDraft = try await RaceDraft.find(draftID, on: req.db) else {
+                throw Abort(.notFound, reason: "Draft not found.")
+            }
+            return try await makeV2RaceDraftResponse(
+                draft: refreshedDraft,
+                league: league,
+                race: race,
+                leagueID: leagueID,
+                sql: sql
+            )
+        }
 
         struct PickRow: Decodable {
             let user_id: Int
@@ -830,6 +955,11 @@ struct LeagueController: RouteCollection {
             currentPickIndex: draft.currentPickIndex,
             mirrorPicks: draft.mirrorPicks,
             status: draft.status,
+            gameplayVersion: draft.gameplayVersion,
+            resolutionState: nil,
+            resolutionRevision: nil,
+            submissionDeadline: nil,
+            banWindowClosesAt: nil,
             pickedDriverIDs: pickedDriverIDs,
             bannedDriverIDs: bannedDriverIDs,
             bannedDriverIDsByPickIndex: bannedDriverIDsByPickIndex,
@@ -840,6 +970,100 @@ struct LeagueController: RouteCollection {
             protectedRepickUserID: draft.protectedRepickUserID,
             protectedRepickPickIndex: draft.protectedRepickPickIndex,
             protectedRepickDeadline: draft.protectedRepickDeadline
+        )
+    }
+
+    private func makeV2RaceDraftResponse(
+        draft: RaceDraft,
+        league: League,
+        race: Race,
+        leagueID: Int,
+        sql: any SQLDatabase
+    ) async throws -> RaceDraftResponse {
+        struct SlotRow: Decodable {
+            let pick_index: Int
+            let driver_id: Int?
+        }
+        struct CurrentBanRow: Decodable {
+            let actor_user_id: Int
+            let actor_team_id: Int?
+            let target_driver_id: Int
+            let target_pick_index: Int
+        }
+        struct SeasonBanRow: Decodable {
+            let actor_user_id: Int
+            let actor_team_id: Int?
+        }
+
+        let draftID = try draft.requireID()
+        let slots = try await sql.raw("""
+            SELECT pick_index, driver_id
+            FROM v2_draft_slots
+            WHERE draft_id = \(bind: draftID)
+            ORDER BY pick_index
+        """).all(decoding: SlotRow.self)
+        let currentBans = try await sql.raw("""
+            SELECT actor_user_id, actor_team_id, target_driver_id, target_pick_index
+            FROM v2_draft_bans
+            WHERE draft_id = \(bind: draftID)
+            ORDER BY target_pick_index
+        """).all(decoding: CurrentBanRow.self)
+        let seasonBans = try await sql.raw("""
+            SELECT vb.actor_user_id, vb.actor_team_id
+            FROM v2_draft_bans vb
+            JOIN race_drafts rd ON rd.id = vb.draft_id
+            JOIN races r ON r.id = rd.race_id
+            WHERE rd.league_id = \(bind: leagueID)
+              AND r.season_id = \(bind: race.seasonID)
+        """).all(decoding: SeasonBanRow.self)
+
+        var pickedDriverIDs = Array<Int?>(repeating: nil, count: draft.pickOrder.count)
+        for slot in slots where pickedDriverIDs.indices.contains(slot.pick_index) {
+            pickedDriverIDs[slot.pick_index] = slot.driver_id
+        }
+        var bannedDriverIDsByPickIndex = Array<Int?>(repeating: nil, count: draft.pickOrder.count)
+        var bannedByUserIDsByPickIndex = Array<Int?>(repeating: nil, count: draft.pickOrder.count)
+        for ban in currentBans where bannedDriverIDsByPickIndex.indices.contains(ban.target_pick_index) {
+            bannedDriverIDsByPickIndex[ban.target_pick_index] = ban.target_driver_id
+            bannedByUserIDsByPickIndex[ban.target_pick_index] = ban.actor_user_id
+        }
+
+        let uniqueUserIDs = Set(draft.pickOrder)
+        var userUsage = Dictionary(uniqueKeysWithValues: uniqueUserIDs.map { (String($0), 0) })
+        var teamUsage: [String: Int] = [:]
+        for ban in seasonBans {
+            userUsage[String(ban.actor_user_id), default: 0] += 1
+            if let teamID = ban.actor_team_id {
+                teamUsage[String(teamID), default: 0] += 1
+            }
+        }
+
+        let submissionDeadline = race.fp1Time.map {
+            PickDriverV2Service.submissionDeadline(fp1Time: $0, bansEnabled: league.bansEnabled)
+        }
+        return RaceDraftResponse(
+            id: draftID,
+            league: RaceDraftResponse.LeagueRef(id: leagueID),
+            raceID: draft.raceID,
+            pickOrder: draft.pickOrder,
+            currentPickIndex: draft.currentPickIndex,
+            mirrorPicks: draft.mirrorPicks,
+            status: draft.status,
+            gameplayVersion: draft.gameplayVersion,
+            resolutionState: draft.resolutionState,
+            resolutionRevision: draft.resolutionRevision,
+            submissionDeadline: submissionDeadline,
+            banWindowClosesAt: league.bansEnabled ? race.fp1Time : nil,
+            pickedDriverIDs: pickedDriverIDs,
+            bannedDriverIDs: currentBans.map(\.target_driver_id).sorted(),
+            bannedDriverIDsByPickIndex: bannedDriverIDsByPickIndex,
+            bannedByUserIDsByPickIndex: bannedByUserIDsByPickIndex,
+            bansUsedByUserID: userUsage,
+            bansUsedByTeamID: teamUsage,
+            banLimitPerActor: league.teamsEnabled ? 3 : 2,
+            protectedRepickUserID: nil,
+            protectedRepickPickIndex: nil,
+            protectedRepickDeadline: nil
         )
     }
 

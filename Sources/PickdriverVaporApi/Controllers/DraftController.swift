@@ -18,6 +18,7 @@ struct DraftController: RouteCollection {
         let pick_order: [Int]
         let current_pick_index: Int
         let mirror_picks: Bool
+        let gameplay_version: String
         let protected_repick_user_id: Int?
         let protected_repick_pick_index: Int?
         let protected_repick_deadline: Date?
@@ -38,6 +39,7 @@ struct DraftController: RouteCollection {
         let protected = routes.grouped(UserAuthenticator())
         protected.post("leagues", ":leagueID", "draft", ":raceID", "pick", use: makePick)
         protected.post("leagues", ":leagueID", "draft", ":raceID", "ban", use: banPick)
+        protected.post("leagues", ":leagueID", "draft", ":raceID", "v2", "ban", use: banV2Pick)
     }
     
     struct PickRequest: Content {
@@ -102,6 +104,9 @@ struct DraftController: RouteCollection {
             }
 
             let draft = try await lockDraft(leagueID: leagueID, raceID: raceID, sql: sql)
+            guard draft.gameplay_version == DraftGameplayVersion.legacy.rawValue else {
+                throw Abort(.conflict, reason: "Turn-based picks are not available in PickDriver V2. Submit pick preferences instead.")
+            }
             let draftID = draft.id
             let pickOrder = draft.pick_order
             let protectedRepick = protectedRepickState(from: draft)
@@ -422,6 +427,9 @@ struct DraftController: RouteCollection {
             }
 
             let draft = try await lockDraft(leagueID: leagueID, raceID: raceID, sql: sql)
+            guard draft.gameplay_version == DraftGameplayVersion.legacy.rawValue else {
+                throw Abort(.conflict, reason: "Use the PickDriver V2 ban endpoint for this draft.")
+            }
             let draftID = draft.id
             let pickOrder = draft.pick_order
             let protectedRepick = protectedRepickState(from: draft)
@@ -666,6 +674,38 @@ struct DraftController: RouteCollection {
         return outcome.0
     }
 
+    func banV2Pick(_ req: Request) async throws -> PickDriverV2Service.BanResult {
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+        let data = try req.content.decode(BanRequest.self)
+        guard let leagueID = req.parameters.get("leagueID", as: Int.self),
+              let raceID = req.parameters.get("raceID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid league or race ID.")
+        }
+
+        _ = try await LeagueAccess.requireMember(req, leagueID: leagueID)
+        try await PlayoffService.requireDraftReady(leagueID: leagueID, raceID: raceID, on: req.db)
+
+        guard let draft = try await RaceDraft.query(on: req.db)
+            .filter(\.$league.$id == leagueID)
+            .filter(\.$raceID == raceID)
+            .first() else {
+            throw Abort(.notFound, reason: "Draft not found.")
+        }
+        let draftID = try draft.requireID()
+        let now = Date()
+        try await PickDriverV2Service.resolveIfDue(draftID: draftID, now: now, on: req.db)
+        return try await PickDriverV2Service.ban(
+            leagueID: leagueID,
+            raceID: raceID,
+            actorUserID: userID,
+            targetUserID: data.targetUserID,
+            driverID: data.driverID,
+            now: now,
+            on: req.db
+        )
+    }
+
     private func lockDraft(
         leagueID: Int,
         raceID: Int,
@@ -677,6 +717,7 @@ struct DraftController: RouteCollection {
                 pick_order,
                 current_pick_index,
                 mirror_picks,
+                gameplay_version,
                 protected_repick_user_id,
                 protected_repick_pick_index,
                 protected_repick_deadline

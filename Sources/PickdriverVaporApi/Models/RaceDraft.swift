@@ -32,6 +32,18 @@ final class RaceDraft: Model, Content, @unchecked Sendable {
     @Field(key: "status")
     var status: String  
 
+    @Field(key: "gameplay_version")
+    var gameplayVersion: String
+
+    @Field(key: "resolution_state")
+    var resolutionState: String
+
+    @OptionalField(key: "resolved_at")
+    var resolvedAt: Date?
+
+    @Field(key: "resolution_revision")
+    var resolutionRevision: Int
+
     @OptionalField(key: "protected_repick_user_id")
     var protectedRepickUserID: Int?
 
@@ -43,13 +55,26 @@ final class RaceDraft: Model, Content, @unchecked Sendable {
 
     init() {}
 
-    init(leagueID: Int, raceID: Int, pickOrder: [Int], mirrorPicks: Bool, status: String) {
+    init(
+        leagueID: Int,
+        raceID: Int,
+        pickOrder: [Int],
+        mirrorPicks: Bool,
+        status: String,
+        gameplayVersion: DraftGameplayVersion = .legacy
+    ) {
         self.$league.id = leagueID
         self.raceID = raceID
         self.pickOrder = pickOrder
         self.currentPickIndex = 0
         self.mirrorPicks = mirrorPicks
         self.status = status
+        self.gameplayVersion = gameplayVersion.rawValue
+        self.resolutionState = gameplayVersion == .v2
+            ? V2DraftResolutionState.collecting.rawValue
+            : V2DraftResolutionState.legacy.rawValue
+        self.resolvedAt = nil
+        self.resolutionRevision = 0
         self.protectedRepickUserID = nil
         self.protectedRepickPickIndex = nil
         self.protectedRepickDeadline = nil
@@ -70,6 +95,9 @@ struct DraftDeadline: Content {
     let protectedRepickUserID: Int?
     let protectedRepickPickIndex: Int?
     let protectedRepickDeadline: Date?
+    let gameplayVersion: String?
+    let submissionDeadline: Date?
+    let banWindowClosesAt: Date?
 
     init(
         raceID: Int,
@@ -78,7 +106,10 @@ struct DraftDeadline: Content {
         secondHalfDeadline: Date,
         protectedRepickUserID: Int? = nil,
         protectedRepickPickIndex: Int? = nil,
-        protectedRepickDeadline: Date? = nil
+        protectedRepickDeadline: Date? = nil,
+        gameplayVersion: String? = nil,
+        submissionDeadline: Date? = nil,
+        banWindowClosesAt: Date? = nil
     ) {
         self.raceID = raceID
         self.leagueID = leagueID
@@ -87,6 +118,9 @@ struct DraftDeadline: Content {
         self.protectedRepickUserID = protectedRepickUserID
         self.protectedRepickPickIndex = protectedRepickPickIndex
         self.protectedRepickDeadline = protectedRepickDeadline
+        self.gameplayVersion = gameplayVersion
+        self.submissionDeadline = submissionDeadline
+        self.banWindowClosesAt = banWindowClosesAt
     }
 }
 
