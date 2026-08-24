@@ -270,8 +270,8 @@ final class NotificationTests: XCTestCase {
             )
 
             var publishResponse: PublishResultsResponse?
-            try await app.test(.POST, "/api/races/\(raceID)/results/publish", beforeRequest: { req async throws in
-                req.headers.bearerAuthorization = .init(token: userA.token)
+            try await app.test(.POST, "/api/internal/races/\(raceID)/results/publish", beforeRequest: { req async throws in
+                req.headers.replaceOrAdd(name: "X-Internal-Token", value: "test-internal-token")
             }, afterResponse: { res async throws in
                 XCTAssertEqual(res.status, .ok)
                 publishResponse = try res.content.decode(PublishResultsResponse.self)

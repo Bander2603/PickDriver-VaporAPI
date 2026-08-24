@@ -96,6 +96,7 @@ func routes(_ app: Application) throws {
             .grouped(InternalHTTPSMiddleware())
         try internalProtected.grouped("system").register(collection: InternalSystemController())
         try internalProtected.grouped("ops").register(collection: InternalOpsController())
+        try internalProtected.register(collection: InternalRaceAdministrationController())
     }
 
     // Simple test endpoints (non-API path)

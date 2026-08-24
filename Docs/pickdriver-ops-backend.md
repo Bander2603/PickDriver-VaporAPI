@@ -49,6 +49,13 @@ This document describes the current backend status for `PickDriver Ops` and the 
 - This is the only supported administrative path to enable or disable a league's playoffs. It persists the option, reconciles untouched future drafts immediately, and records an Ops audit event.
 - The endpoint never reclassifies completed or active drafts. Disabling is rejected after a player chooses a playoff position, a bracket is finalized, or a playoff draft has activity.
 
+### Global race administration
+
+- `POST /api/internal/races/:raceID/results/publish`
+- `POST /api/internal/races/:raceID/cancel`
+- Both routes require `X-Internal-Token` and the internal HTTPS policy.
+- These operations were deliberately removed from the end-user JWT boundary because they mutate global race, draft, playoff, standings, and notification state.
+
 ### Relevant environment variables
 
 - `APP_VERSION`

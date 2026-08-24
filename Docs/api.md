@@ -54,6 +54,7 @@ Auth:
 - email verification and password reset use one-time, expiring tokens
 - Google auth requires GOOGLE_CLIENT_ID or GOOGLE_CLIENT_IDS in backend
 - Apple auth requires APPLE_CLIENT_ID or APPLE_CLIENT_IDS in backend
+- Apple account resolution trusts only claims from the verified Apple identity token. A client-provided `email` is never used to find, create, or link an account.
 - `DELETE /api/auth/account` performs a soft-delete:
   - pending leagues: user is removed; if owner, pending league is deleted
   - active leagues: membership is kept and username is marked as deleted
@@ -143,6 +144,17 @@ Notifications:
   - Res: `LeaguePublic`
   - Notes: administrative only. Enabling an active league recalculates its future pristine drafts immediately; disabling is rejected after a playoff choice, finalized bracket, or started playoff draft.
 
+### Internal race administration (internal token)
+- POST /api/internal/races/:raceID/results/publish
+  - Required header: `X-Internal-Token`
+  - Marks a non-cancelled race completed after verifying that results exist, synchronizes playoffs, and enqueues/attempts race-result notifications.
+  - Res: `{ "createdNotifications": Int }`
+- POST /api/internal/races/:raceID/cancel
+  - Required header: `X-Internal-Token`
+  - Rejects completed races, marks the race cancelled, and invalidates/reconciles affected draft state.
+  - Res: `{ "raceID": Int, "status": "cancelled", "completed": false }`
+- These global mutations are not available with an end-user JWT and are intentionally absent from `/api/races/*`.
+
 Maintenance notes:
 - When `maintenanceMode` is enabled, API returns `503` for `/api/*` routes except `/api/health/*` and `/api/internal/*`.
 - Every maintenance toggle is audited in `ops_audit_events`.
@@ -184,7 +196,9 @@ Maintenance notes:
 - POST /api/auth/apple
   - Req: { "idToken": "...", "email": "a@b.com"?, "firstName": "John"?, "lastName": "Doe"? }
   - Res: { "user": UserPublic, "token": "..." }
-  - Note: `email` is a fallback when Apple does not include email in subsequent sign-ins.
+  - `email` is accepted only for backward wire compatibility and is ignored for identity resolution.
+  - An already-linked `appleID` can sign in when a later Apple token omits email.
+  - A previously unlinked Apple identity requires a verified email claim inside the signed Apple token. A body email cannot link or claim an existing account.
 - GET /api/auth/profile (auth)
   - Res: UserPublic
 - PUT /api/auth/password (auth)
@@ -317,10 +331,6 @@ Client integration notes (iOS/Web):
   - Req: `{ "targetUserID": Int, "driverID": Int }`
   - Res: `{ "draftID": Int, "targetUserID": Int, "bannedDriverID": Int, "targetPickIndex": Int, "resolutionRevision": Int }`
   - Available only during the V2 ban window (`FP1 - 24h <= now < FP1`).
-
-### Results publish (auth)
-- POST /api/races/:raceID/results/publish
-  - Res: { "createdNotifications": Int }
 
 ## Models (summary)
 

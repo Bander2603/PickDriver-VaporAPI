@@ -23,6 +23,16 @@ This document summarizes the actual rules implemented in the API for leagues, dr
   - push tokens are deactivated
 - Deleted users cannot authenticate again with existing JWTs.
 
+## Social identity linking
+- An Apple identity already stored in `users.apple_id` is resolved by the verified Apple subject and does not require a repeated email claim.
+- A new Apple subject can create or link an account only from a verified email claim contained in the signed Apple identity token.
+- The optional `email` sent by a client is ignored for identity resolution and can never be used to claim an existing account.
+
+## Global race administration
+- Race reads remain public under `/api/races/*`.
+- Publishing results and cancelling a race are global administrative mutations available only under `/api/internal/races/*`.
+- They require the internal service token and the configured internal HTTPS policy; end-user JWTs do not authorize these operations.
+
 ## Trademark notice
 This project is independent and is not affiliated with or endorsed by Formula 1, the FIA, or related entities. No official logos or brand assets are used. “Formula 1”, “F1”, and related marks belong to their respective owners and are referenced for descriptive purposes only.
 

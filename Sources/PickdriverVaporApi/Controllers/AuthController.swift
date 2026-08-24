@@ -47,9 +47,17 @@ struct GoogleAuthRequest: Content {
 
 struct AppleAuthRequest: Content {
     let idToken: String
+    /// Kept for wire compatibility with existing clients. It is never trusted
+    /// for identity resolution; only the verified Apple token email may be used.
     let email: String?
     let firstName: String?
     let lastName: String?
+}
+
+struct VerifiedAppleIdentity {
+    let subject: String
+    let email: String?
+    let emailVerified: Bool?
 }
 
 struct ResendVerificationRequest: Content {
@@ -526,56 +534,68 @@ struct AuthController: RouteCollection {
         }
 
         let tokenInfo = try await verifyAppleIDToken(idToken, on: req)
-        let appleSubject = tokenInfo.subject.value
+        let identity = VerifiedAppleIdentity(
+            subject: tokenInfo.subject.value,
+            email: tokenInfo.email,
+            emailVerified: tokenInfo.emailVerified?.value
+        )
+        let user = try await resolveAppleUser(data, identity: identity, on: req.db)
+        let token = try generateToken(for: user, on: req)
+        return AuthResponse(user: user.convertToPublic(), token: token)
+    }
 
-        if let user = try await User.query(on: req.db)
-            .filter(\.$appleID == appleSubject)
+    static func resolveAppleUser(
+        _ data: AppleAuthRequest,
+        identity: VerifiedAppleIdentity,
+        on db: any Database
+    ) async throws -> User {
+        if let user = try await User.query(on: db)
+            .filter(\.$appleID == identity.subject)
             .filter(\.$deletedAt == nil)
             .first() {
-            let token = try generateToken(for: user, on: req)
-            return AuthResponse(user: user.convertToPublic(), token: token)
+            return user
         }
 
-        let tokenEmail = tokenInfo.email?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallbackEmail = data.email?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedRawEmail = (tokenEmail?.isEmpty == false) ? tokenEmail : ((fallbackEmail?.isEmpty == false) ? fallbackEmail : nil)
-        guard let resolvedRawEmail else {
+        guard let rawEmail = identity.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawEmail.isEmpty else {
             throw Abort(
                 .badRequest,
-                reason: "Apple token did not provide email. Sign in once with email sharing enabled or provide an email from the client."
+                reason: "Apple token did not provide email for an unlinked identity. Sign in with the account's existing method or authorize Apple email sharing."
             )
         }
 
-        let normalizedEmail = normalizeEmail(resolvedRawEmail)
-        guard isValidEmail(normalizedEmail) else {
-            throw Abort(.badRequest, reason: "Email format is invalid.")
+        guard identity.emailVerified == true else {
+            throw Abort(.unauthorized, reason: "Apple account email is not verified.")
         }
 
-        if let user = try await User.query(on: req.db)
+        let normalizedEmail = normalizeEmail(rawEmail)
+        guard isValidEmail(normalizedEmail) else {
+            throw Abort(.badRequest, reason: "Apple token email format is invalid.")
+        }
+
+        if let user = try await User.query(on: db)
             .filter(\.$email == normalizedEmail)
             .filter(\.$deletedAt == nil)
             .first() {
-            user.appleID = appleSubject
+            user.appleID = identity.subject
             user.emailVerified = true
             user.emailVerificationTokenHash = nil
             user.emailVerificationExpiresAt = nil
             user.emailVerificationSentAt = nil
-            try await user.save(on: req.db)
-            let token = try generateToken(for: user, on: req)
-            return AuthResponse(user: user.convertToPublic(), token: token)
+            try await user.save(on: db)
+            return user
         }
 
         let username = try await generateUniqueUsername(
             base: makeUsernameBase(firstName: data.firstName, lastName: data.lastName, email: normalizedEmail),
-            on: req
+            on: db
         )
         let randomPassword = generateTokenString()
         let user = User(username: username, email: normalizedEmail, passwordHash: try Bcrypt.hash(randomPassword), emailVerified: true)
-        user.appleID = appleSubject
-        try await user.save(on: req.db)
+        user.appleID = identity.subject
+        try await user.save(on: db)
 
-        let token = try generateToken(for: user, on: req)
-        return AuthResponse(user: user.convertToPublic(), token: token)
+        return user
     }
 
     private static func sendVerificationEmail(
@@ -882,6 +902,10 @@ struct AuthController: RouteCollection {
     }
 
     private static func generateUniqueUsername(base: String, on req: Request) async throws -> String {
+        try await generateUniqueUsername(base: base, on: req.db)
+    }
+
+    private static func generateUniqueUsername(base: String, on db: any Database) async throws -> String {
         let sanitized = normalizeUsername(base)
         var candidate = sanitized
         if !isValidUsername(candidate) {
@@ -890,7 +914,7 @@ struct AuthController: RouteCollection {
         candidate = String(candidate.prefix(AuthPolicy.maxUsernameLength))
 
         var attempts = 0
-        while try await User.query(on: req.db).filter(\.$username == candidate).first() != nil {
+        while try await User.query(on: db).filter(\.$username == candidate).first() != nil {
             attempts += 1
             let suffix = String(UUID().uuidString.prefix(6))
             let trimmedBase = String(candidate.prefix(AuthPolicy.maxUsernameLength - 7))
