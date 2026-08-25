@@ -276,6 +276,7 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddLeaguePlayoffConfiguration())
     app.migrations.add(AddPickDriverV2DraftState())
     app.migrations.add(CreatePickDriverV2Tables())
+    app.migrations.add(AddRaceDriverSubstitutions())
 
     // Results + maintenance
     app.migrations.add(CreateRaceResults())

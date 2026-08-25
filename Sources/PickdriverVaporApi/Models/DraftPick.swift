@@ -23,6 +23,12 @@ final class DraftPick: Model, Content, @unchecked Sendable {
     @Parent(key: "driver_id")
     var driver: Driver
 
+    @OptionalParent(key: "original_driver_id")
+    var originalDriver: Driver?
+
+    @Field(key: "substitution_revision")
+    var substitutionRevision: Int
+
     @Field(key: "is_mirror_pick")
     var isMirrorPick: Bool
 
@@ -47,6 +53,8 @@ final class DraftPick: Model, Content, @unchecked Sendable {
         self.$draft.id = draftID
         self.$user.id = userID
         self.$driver.id = driverID
+        self.$originalDriver.id = nil
+        self.substitutionRevision = 0
         self.isMirrorPick = isMirrorPick
         self.isBanned = false
         self.isAutopick = isAutopick

@@ -293,6 +293,26 @@ ORDER BY created_at;
 
 `CreatePickDriverV2Tables` creates reusable preferences, immutable per-draft snapshots, resolved slots and auditable V2 bans. The migration is additive for all completed legacy history. Before production migration, confirm the Dutch GP remains `race_id = 39`, season 2, round 14 and take a database backup.
 
+### Race-scoped driver substitutions
+
+`AddRaceDriverSubstitutions` creates `race_driver_entries` and `race_driver_substitutions` and adds nullable `original_driver_id` plus a non-null substitution revision to V2 slots and materialized picks. Existing picks retain their current effective driver and receive revision zero; no historical row is rewritten.
+
+Apply this migration before configuring or reconciling a substitution. For the Dutch GP, run the internal reconcile endpoint first with `dryRun=true`, review every affected slot, then repeat with `dryRun=false`. Do not publish results until every result `f1_team_id` matches the applied race roster.
+
+Verification:
+
+```sql
+SELECT race_id, driver_id, f1_team_id, status
+FROM race_driver_entries
+WHERE race_id = 39
+ORDER BY driver_id;
+
+SELECT race_id, outgoing_driver_id, incoming_driver_id, f1_team_id
+FROM race_driver_substitutions
+WHERE race_id = 39
+ORDER BY id;
+```
+
 ### Users table columns
 ```sql
 SELECT column_name

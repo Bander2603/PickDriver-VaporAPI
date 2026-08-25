@@ -148,7 +148,14 @@ Notifications:
 - POST /api/internal/races/:raceID/results/publish
   - Required header: `X-Internal-Token`
   - Marks a non-cancelled race completed after verifying that results exist, synchronizes playoffs, and enqueues/attempts race-result notifications.
+  - If a race-specific driver roster has been configured, every result must belong to an `entered` driver and its `f1_team_id` must match that roster.
   - Res: `{ "createdNotifications": Int }`
+- POST /api/internal/races/:raceID/substitutions/reconcile
+  - Required header: `X-Internal-Token`
+  - Req: `{ "dryRun": Bool?, "substitutions": [{ "outgoingDriverID": Int, "incomingDriverID": Int, "f1TeamID": Int, "announcedAt": Date? }] }`
+  - The request is the complete desired substitution chain for the race. `dryRun=true` validates and reports the changes without writing. Apply mode stores the race roster and substitution chain and transactionally reconciles resolved/finalized V2 drafts from their immutable snapshots.
+  - Rejects cycles, duplicate outgoing/incoming drivers, cross-season drivers/teams, and legacy drafts.
+  - Res: `{ "raceID": Int, "dryRun": Bool, "roster": [{ "driverID": Int, "f1TeamID": Int, "status": "entered"|"withdrawn"|"reserve" }], "drafts": [{ "draftID": Int, "state": String, "revisionBefore": Int, "revisionAfter": Int, "changes": [{ "pickIndex": Int, "userID": Int, "previousDriverID": Int?, "previousOriginalDriverID": Int?, "effectiveDriverID": Int?, "originalDriverID": Int? }] }] }`
 - POST /api/internal/races/:raceID/cancel
   - Required header: `X-Internal-Token`
   - Rejects completed races, marks the race cancelled, and invalidates/reconciles affected draft state.
@@ -236,9 +243,9 @@ Client integration notes (iOS/Web):
 
 ### F1 Standings (public)
 - GET /api/standings/f1/drivers
-  - Res: DriverStanding[] (active season only; includes zero points if no results)
+  - Res: DriverStanding[] (active season only; includes zero points if no results). Official totals include main-race and sprint points.
 - GET /api/standings/f1/teams
-  - Res: TeamStanding[] (active season only; includes zero points if no results)
+  - Res: TeamStanding[] (active season only; includes zero points if no results). Official totals include main-race and sprint points.
 
 ### Leagues (auth)
 - GET /api/leagues/my
@@ -302,6 +309,7 @@ Client integration notes (iOS/Web):
   - Res: 200 OK
 
 ### Player standings (auth)
+- League totals use only main-race points. `race_results.sprint_points` never contributes to player standings, league-team standings, pick history, autopicks, deviations, or playoff seeding.
 - GET /api/players/standings/players?league_id=...
   - Res: PlayerStanding[]
 - GET /api/players/standings/teams?league_id=...
@@ -363,8 +371,9 @@ F1Team:
 { "id": Int, "seasonID": Int, "name": String, "color": String }
 
 RaceDraft:
-{ "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String, "gameplayVersion": "legacy"|"v2", "resolutionState": String?, "resolutionRevision": Int?, "submissionDeadline": Date?, "banWindowClosesAt": Date?, "pickedDriverIDs": [Int?], "bannedDriverIDs": [Int], "bannedDriverIDsByPickIndex": [Int?], "bannedByUserIDsByPickIndex": [Int?], "bansUsedByUserID": { "<userID>": Int }, "bansUsedByTeamID": { "<teamID>": Int }, "banLimitPerActor": Int }
+{ "id": Int, "league": { "id": Int }, "raceID": Int, "pickOrder": [Int], "currentPickIndex": Int, "mirrorPicks": Bool, "status": String, "gameplayVersion": "legacy"|"v2", "resolutionState": String?, "resolutionRevision": Int?, "submissionDeadline": Date?, "banWindowClosesAt": Date?, "pickedDriverIDs": [Int?], "originalPickedDriverIDs": [Int?], "bannedDriverIDs": [Int], "bannedDriverIDsByPickIndex": [Int?], "bannedByUserIDsByPickIndex": [Int?], "bansUsedByUserID": { "<userID>": Int }, "bansUsedByTeamID": { "<teamID>": Int }, "banLimitPerActor": Int }
   - pickedDriverIDs is aligned with pickOrder (same length), with null where no active pick exists or pick was banned.
+  - `pickedDriverIDs` contains the effective driver that scores. `originalPickedDriverIDs` contains the pre-substitution preferred driver only for substituted slots; other positions are null.
   - bannedDriverIDs includes all driver_id values with is_banned = true in the draft.
   - bannedDriverIDsByPickIndex is aligned with pickOrder (same length); contains the last banned driver for that slot or null if none.
   - bannedByUserIDsByPickIndex is aligned with pickOrder (same length); contains the `user_id` that executed the ban for that slot or null.
@@ -400,7 +409,7 @@ PlayerTeamStanding:
 { "team_id": Int, "name": String, "total_points": Double, "total_deviation": Double }
 
 PickHistory:
-{ "race_name": String, "round": Int, "pick_position": Int, "driver_name": String, "points": Double, "expected_points": Double?, "deviation": Double? }
+{ "race_name": String, "round": Int, "pick_position": Int, "driver_name": String, "original_driver_name": String?, "points": Double, "expected_points": Double?, "deviation": Double? }
 
 PushNotificationPublic:
 { "id": Int, "type": String, "title": String, "body": String, "data": NotificationPayload?, "leagueID": Int?, "raceID": Int?, "createdAt": Date?, "readAt": Date?, "deliveredAt": Date? }

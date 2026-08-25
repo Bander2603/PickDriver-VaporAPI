@@ -765,6 +765,7 @@ struct LeagueController: RouteCollection {
         let submissionDeadline: Date?
         let banWindowClosesAt: Date?
         let pickedDriverIDs: [Int?]
+        let originalPickedDriverIDs: [Int?]
         let bannedDriverIDs: [Int]
         let bannedDriverIDsByPickIndex: [Int?]
         let bannedByUserIDsByPickIndex: [Int?]
@@ -961,6 +962,7 @@ struct LeagueController: RouteCollection {
             submissionDeadline: nil,
             banWindowClosesAt: nil,
             pickedDriverIDs: pickedDriverIDs,
+            originalPickedDriverIDs: Array(repeating: nil, count: pickedDriverIDs.count),
             bannedDriverIDs: bannedDriverIDs,
             bannedDriverIDsByPickIndex: bannedDriverIDsByPickIndex,
             bannedByUserIDsByPickIndex: bannedByUserIDsByPickIndex,
@@ -983,6 +985,7 @@ struct LeagueController: RouteCollection {
         struct SlotRow: Decodable {
             let pick_index: Int
             let driver_id: Int?
+            let original_driver_id: Int?
         }
         struct CurrentBanRow: Decodable {
             let actor_user_id: Int
@@ -997,7 +1000,7 @@ struct LeagueController: RouteCollection {
 
         let draftID = try draft.requireID()
         let slots = try await sql.raw("""
-            SELECT pick_index, driver_id
+            SELECT pick_index, driver_id, original_driver_id
             FROM v2_draft_slots
             WHERE draft_id = \(bind: draftID)
             ORDER BY pick_index
@@ -1018,8 +1021,10 @@ struct LeagueController: RouteCollection {
         """).all(decoding: SeasonBanRow.self)
 
         var pickedDriverIDs = Array<Int?>(repeating: nil, count: draft.pickOrder.count)
+        var originalPickedDriverIDs = Array<Int?>(repeating: nil, count: draft.pickOrder.count)
         for slot in slots where pickedDriverIDs.indices.contains(slot.pick_index) {
             pickedDriverIDs[slot.pick_index] = slot.driver_id
+            originalPickedDriverIDs[slot.pick_index] = slot.original_driver_id
         }
         var bannedDriverIDsByPickIndex = Array<Int?>(repeating: nil, count: draft.pickOrder.count)
         var bannedByUserIDsByPickIndex = Array<Int?>(repeating: nil, count: draft.pickOrder.count)
@@ -1055,6 +1060,7 @@ struct LeagueController: RouteCollection {
             submissionDeadline: submissionDeadline,
             banWindowClosesAt: league.bansEnabled ? race.fp1Time : nil,
             pickedDriverIDs: pickedDriverIDs,
+            originalPickedDriverIDs: originalPickedDriverIDs,
             bannedDriverIDs: currentBans.map(\.target_driver_id).sorted(),
             bannedDriverIDsByPickIndex: bannedDriverIDsByPickIndex,
             bannedByUserIDsByPickIndex: bannedByUserIDsByPickIndex,

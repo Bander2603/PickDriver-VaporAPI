@@ -185,7 +185,10 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 
 ## Standings and scoring
 - Only non-banned picks are counted.
-- Autopicks are worth 50% of driver points.
+- League scoring uses only the main-race points stored in `race_results.points`.
+- Sprint points (`race_results.sprint_points`) are excluded from every league calculation, including player/team standings, pick history, autopicks, expected-point deviations, and playoff seeding.
+- Sprint points are included only in the official F1 driver and constructor standings exposed by `/api/standings/f1/drivers` and `/api/standings/f1/teams`.
+- Autopicks are worth 50% of the main-race driver points.
 - V2 resolved picks are materialized with `is_autopick = false` at FP1 and score 100%.
 - Standings are computed over completed races.
 - For mirrored picks, position calculation considers mirror order.
@@ -200,6 +203,18 @@ This project is independent and is not affiliated with or endorsed by Formula 1,
 - A player cannot ban themself or a teammate. Each target may be banned at most once per race.
 - Ban budgets cover the whole league season: 2 per user without teams, or 3 shared by a team.
 - Playoff ordering is finalized before the V2 snapshot is captured and resolved.
+
+## Race-scoped driver substitutions
+- Temporary substitutions do not rewrite a driver's season-level default team.
+- Internal operations configure the complete substitution chain and effective roster for one race.
+- Reconciliation always uses the immutable V2 preference snapshot for that draft, never the player's current reusable list.
+- For a chain `A -> B -> C`, `A` maps to `B`. Driver `B` maps to `C` only when `A` appeared before `B` in that player's frozen list; otherwise `B` remains `B`.
+- Effective drivers remain unique within a draft. If an effective driver is already held by an earlier slot, resolution advances to the next transformed preference using normal draft-order priority.
+- `driver_id` remains the effective scoring driver. `original_driver_id` records the substituted preference for audit/history.
+- Resolved and finalized V2 drafts can be reconciled transactionally after a late announcement. Repeated application of the same configuration is idempotent.
+- Bans are not reopened. A candidate is excluded when either its original or effective driver was banned for that target.
+- When a race roster exists, result publication rejects withdrawn/reserve drivers and driver/team mismatches.
+- Legacy drafts are not automatically reinterpreted because they do not have immutable V2 preference snapshots.
 
 ## Draft-related notifications
 - Starting draft notifies first user in order.

@@ -19,6 +19,19 @@ struct InternalRaceAdministrationController: RouteCollection {
         let races = routes.grouped("races")
         races.post(":raceID", "cancel", use: cancelRace)
         races.post(":raceID", "results", "publish", use: publishResults)
+        races.post(":raceID", "substitutions", "reconcile", use: reconcileSubstitutions)
+    }
+
+    func reconcileSubstitutions(_ req: Request) async throws -> RaceDriverSubstitutionService.Response {
+        guard let raceID = req.parameters.get("raceID", as: Int.self) else {
+            throw Abort(.badRequest, reason: "Invalid race ID.")
+        }
+        let payload = try req.content.decode(RaceDriverSubstitutionService.Request.self)
+        return try await RaceDriverSubstitutionService.reconcile(
+            raceID: raceID,
+            request: payload,
+            on: req.db
+        )
     }
 
     func publishResults(_ req: Request) async throws -> PublishResultsResponse {
@@ -47,6 +60,33 @@ struct InternalRaceAdministrationController: RouteCollection {
 
         guard (row?.count ?? 0) > 0 else {
             throw Abort(.badRequest, reason: "No results found for this race.")
+        }
+
+        let configuredRoster = try await sql.raw("""
+            SELECT COUNT(*)::int AS count
+            FROM race_driver_entries
+            WHERE race_id = \(bind: raceID)
+        """).first(decoding: CountRow.self)?.count ?? 0
+        if configuredRoster > 0 {
+            let invalidResults = try await sql.raw("""
+                SELECT COUNT(*)::int AS count
+                FROM race_results rr
+                LEFT JOIN race_driver_entries entry
+                  ON entry.race_id = rr.race_id
+                 AND entry.driver_id = rr.driver_id
+                WHERE rr.race_id = \(bind: raceID)
+                  AND (
+                    entry.id IS NULL
+                    OR entry.status <> 'entered'
+                    OR rr.f1_team_id IS DISTINCT FROM entry.f1_team_id
+                  )
+            """).first(decoding: CountRow.self)?.count ?? 0
+            guard invalidResults == 0 else {
+                throw Abort(
+                    .conflict,
+                    reason: "One or more results do not match the configured race driver roster."
+                )
+            }
         }
 
         if race.effectiveStatus != .completed {

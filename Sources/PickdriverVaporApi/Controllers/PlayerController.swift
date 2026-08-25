@@ -29,6 +29,7 @@ struct PickHistory: Content {
     let round: Int
     let pick_position: Int
     let driver_name: String
+    let original_driver_name: String?
     let points: Double
     let expected_points: Double?
     let deviation: Double?
@@ -253,6 +254,7 @@ struct PlayerController: RouteCollection {
                     upp.round,
                     upp.pick_position,
                     d.first_name || ' ' || d.last_name AS driver_name,
+                    od.first_name || ' ' || od.last_name AS original_driver_name,
                     CASE
                         WHEN pp.is_autopick THEN rr.points::double precision * 0.5
                         ELSE rr.points::double precision
@@ -268,6 +270,7 @@ struct PlayerController: RouteCollection {
                     LIMIT 1
                 ) pp ON true
                 LEFT JOIN drivers d ON d.id = pp.driver_id
+                LEFT JOIN drivers od ON od.id = pp.original_driver_id
                 LEFT JOIN race_results rr ON rr.driver_id = d.id AND rr.race_id = upp.race_id
                 WHERE pp.id IS NULL OR pp.is_banned IS DISTINCT FROM true
             )
@@ -276,6 +279,7 @@ struct PlayerController: RouteCollection {
                 pwp.round,
                 pwp.pick_position,
                 COALESCE(pwp.driver_name, 'Missed Pick') AS driver_name,
+                pwp.original_driver_name,
                 COALESCE(pwp.points, 0.0) AS points,
                 ep.expected_points,
                 COALESCE(pwp.points, 0.0) - ep.expected_points AS deviation

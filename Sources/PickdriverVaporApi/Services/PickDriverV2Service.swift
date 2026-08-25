@@ -39,6 +39,13 @@ enum PickDriverV2Service {
         let target_driver_id: Int
     }
 
+    private struct SubstitutionRow: Decodable {
+        let outgoing_driver_id: Int
+        let incoming_driver_id: Int
+        let f1_team_id: Int
+        let announced_at: Date?
+    }
+
     static func submissionDeadline(fp1Time: Date, bansEnabled: Bool) -> Date {
         bansEnabled ? fp1Time.addingTimeInterval(-24 * 3600) : fp1Time
     }
@@ -403,6 +410,22 @@ enum PickDriverV2Service {
         let bannedDriversByUser = Dictionary(grouping: bans, by: \.target_user_id)
             .mapValues { Set($0.map(\.target_driver_id)) }
 
+        let substitutionRows = try await sql.raw("""
+            SELECT s.outgoing_driver_id, s.incoming_driver_id, s.f1_team_id, s.announced_at
+            FROM race_driver_substitutions s
+            JOIN race_drafts rd ON rd.race_id = s.race_id
+            WHERE rd.id = \(bind: draftID)
+            ORDER BY s.id
+        """).all(decoding: SubstitutionRow.self)
+        let substitutions = substitutionRows.map {
+            RaceDriverSubstitutionPolicy.Definition(
+                outgoingDriverID: $0.outgoing_driver_id,
+                incomingDriverID: $0.incoming_driver_id,
+                f1TeamID: $0.f1_team_id,
+                announcedAt: $0.announced_at
+            )
+        }
+
         let prefixDrivers = try await sql.raw("""
             SELECT driver_id
             FROM v2_draft_slots
@@ -424,17 +447,28 @@ enum PickDriverV2Service {
             let userID = pickOrder[pickIndex]
             let isMirrorPick = mirrorPicks && seenUsers.contains(userID)
             let bannedDrivers = bannedDriversByUser[userID] ?? []
-            let driverID = preferencesByUser[userID]?.first {
-                !unavailable.contains($0) && !bannedDrivers.contains($0)
+            let candidate = RaceDriverSubstitutionPolicy.candidates(
+                for: preferencesByUser[userID] ?? [],
+                substitutions: substitutions
+            ).first {
+                !unavailable.contains($0.effectiveDriverID)
+                    && !bannedDrivers.contains($0.originalDriverID)
+                    && !bannedDrivers.contains($0.effectiveDriverID)
+            }
+
+            let driverID = candidate?.effectiveDriverID
+            let originalDriverID = candidate.flatMap {
+                $0.originalDriverID == $0.effectiveDriverID ? nil : $0.originalDriverID
             }
 
             try await sql.raw("""
                 INSERT INTO v2_draft_slots (
-                    draft_id, pick_index, user_id, driver_id, is_mirror_pick,
-                    resolution_revision, updated_at
+                    draft_id, pick_index, user_id, driver_id, original_driver_id,
+                    is_mirror_pick, resolution_revision, substitution_revision, updated_at
                 ) VALUES (
                     \(bind: draftID), \(bind: pickIndex), \(bind: userID),
-                    \(bind: driverID), \(bind: isMirrorPick), \(bind: revision), NOW()
+                    \(bind: driverID), \(bind: originalDriverID), \(bind: isMirrorPick),
+                    \(bind: revision), \(bind: substitutions.isEmpty ? 0 : revision), NOW()
                 )
             """).run()
 
@@ -467,9 +501,11 @@ enum PickDriverV2Service {
     private static func materializeFinalPicks(draftID: Int, sql: any SQLDatabase) async throws {
         try await sql.raw("""
             INSERT INTO player_picks (
-                draft_id, user_id, driver_id, is_banned, is_mirror_pick, is_autopick, picked_at
+                draft_id, user_id, driver_id, original_driver_id, substitution_revision,
+                is_banned, is_mirror_pick, is_autopick, picked_at
             )
-            SELECT draft_id, user_id, driver_id, false, is_mirror_pick, false, NOW()
+            SELECT draft_id, user_id, driver_id, original_driver_id, substitution_revision,
+                   false, is_mirror_pick, false, NOW()
             FROM v2_draft_slots
             WHERE draft_id = \(bind: draftID)
               AND driver_id IS NOT NULL
